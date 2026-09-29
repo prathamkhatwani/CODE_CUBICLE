@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CORTEX | Edge Memory Platform</title>
+    <link rel="stylesheet" href="/static/styles.css?v=2.4">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <nav class="sidebar">
+            <div class="sidebar-brand">
+                <div class="sidebar-logo">C</div>
+                <div class="sidebar-brand-text">
+                    <span class="sidebar-title">CORTEX</span>
+                    <span class="sidebar-badge">EDGE AI</span>
+                </div>
+            </div>
+            <div class="nav-items">
+                <button class="nav-btn active" data-view="overview" title="Overview">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                    <span class="nav-label">Overview</span>
+                </button>
+                <button class="nav-btn" data-view="explorer" title="Memory Explorer">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                    <span class="nav-label">Memory Explorer</span>
+                </button>
+                <button class="nav-btn" data-view="search" title="Semantic Search">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <span class="nav-label">Semantic Search</span>
+                </button>
+                <button class="nav-btn" data-view="consolidation" title="Consolidation (Sleep Cycle)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                    <span class="nav-label">Sleep Cycle</span>
+                </button>
+                <button class="nav-btn" data-view="sync" title="Sync & Cloud Bridge">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                    <span class="nav-label">Cloud Sync</span>
+                </button>
+                <button class="nav-btn" data-view="simulation" title="2D Robot Simulation Arena">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="4"></rect><circle cx="8" cy="12" r="2"></circle><circle cx="16" cy="12" r="2"></circle><path d="M9 16h6M12 7v3"></path></svg>
+                    <span class="nav-label">2D Simulation Arena</span>
+                </button>
+                <button class="nav-btn" data-view="activity" title="Activity Log & Audit Trail">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                    <span class="nav-label">Activity Log</span>
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-title">
+                    <h1>CORTEX</h1>
+                    <span class="subtitle">Edge Intelligence Platform</span>
+                </div>
+                <div class="header-status">
+                    <div class="status-item">
+                        <span class="label">Device:</span>
+                        <span class="value" id="device-name">Node-Alpha</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Model:</span>
+                        <span class="value" id="model-info">Llama-3-8B-Instruct</span>
+                    </div>
+                    <div class="status-item connection">
+                        <div class="pulse-dot online" id="connection-dot"></div>
+                        <span class="value" id="connection-text">Online</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Views Container -->
+            <div class="views-container">
+                <!-- Overview View -->
+                <div class="view active" id="view-overview">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <h3>Total Memories</h3>
+                            <div class="stat-value" id="stat-total">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Synced</h3>
+                            <div class="stat-value text-success" id="stat-synced">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Pending Sync</h3>
+                            <div class="stat-value text-warning" id="stat-pending">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Avg Decay Score</h3>
+                            <div class="stat-value" id="stat-decay">0.00</div>
+                        </div>
+                    </div>
+                    <div class="charts-row">
+                        <div class="card chart-card">
+                            <h3>Memory Count Over Time</h3>
+                            <canvas id="memory-chart"></canvas>
+                        </div>
+                        <div class="card chart-card">
+                            <h3>Categories</h3>
+                            <canvas id="category-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Quick Platform Controls -->
+                    <div class="card mt-4" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+                        <div>
+                            <h3 style="margin-bottom:2px">Quick Platform Controls</h3>
+                            <p style="color:var(--text-muted); font-size:0.8rem">Load pre-built near-duplicate demo scenarios or reset local stores.</p>
+                        </div>
+                        <div style="display:flex; gap:0.6rem; flex-wrap:wrap;">
+                            <button type="button" class="btn" id="btn-seed-data">📦 Seed Sample Data (32 Records)</button>
+                            <button type="button" class="btn anomaly" id="btn-inject-anomaly-overview">⚡ Simulate Anomaly</button>
+                            <button type="button" class="btn text-error" id="btn-reset-data">🔄 Reset Platform</button>
+                        </div>
+                    </div>
+
+                    <!-- Add Memory Card -->
+                    <div class="card mt-4">
+                        <div class="card-header">
+                            <h3>Add New Memory</h3>
+                        </div>
+                        <form id="add-memory-form" class="memory-form">
+                            <div class="form-row">
+                                <textarea id="mem-text" placeholder="Memory text content..." required></textarea>
+                            </div>
+                            <div class="form-row multi">
+                                <select id="mem-source" required>
+                                    <option value="manual">Manual Input</option>
+                                    <option value="sensor">Sensor</option>
+                                    <option value="robot">Robot</option>
+                                    <option value="system">System</option>
+                                    <option value="nav-system">Navigation</option>
+                                </select>
+                                <select id="mem-category" required>
+                                    <option value="general">General</option>
+                                    <option value="sensor_readings">Sensor Readings</option>
+                                    <option value="incident_reports">Incident Reports</option>
+                                    <option value="navigation_logs">Navigation Logs</option>
+                                    <option value="maintenance">Maintenance</option>
+                                    <option value="user_notes">User Notes</option>
+                                </select>
+                                <input type="text" id="mem-tags" placeholder="Tags (comma separated)">
+                            </div>
+                            <div class="form-row align-center">
+                                <label for="mem-importance">Importance: <span id="importance-val">70</span>%</label>
+                                <input type="range" id="mem-importance" min="0" max="100" value="70">
+                                <button type="submit" class="btn primary">Add Memory</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Explorer View -->
+                <div class="view" id="view-explorer">
+                    <div class="card full-height">
+                        <div class="card-header">
+                            <h3>Memory Explorer</h3>
+                            <div class="filters">
+                                <select id="filter-category">
+                                    <option value="all">All Categories</option>
+                                    <option value="sensor_readings">Sensor Readings</option>
+                                    <option value="incident_reports">Incident Reports</option>
+                                    <option value="navigation_logs">Navigation Logs</option>
+                                    <option value="maintenance">Maintenance</option>
+                                    <option value="user_notes">User Notes</option>
+                                    <option value="general">General</option>
+                                </select>
+                                <button class="btn" id="btn-refresh-explorer">Refresh</button>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Text Preview</th>
+                                        <th>Source</th>
+                                        <th>Category</th>
+                                        <th>Importance</th>
+                                        <th>Decay</th>
+                                        <th>Status</th>
+                                        <th>Created</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="explorer-tbody">
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Search View -->
+                <div class="view" id="view-search">
+                    <div class="search-header">
+                        <input type="text" id="search-input" placeholder="Search memories via semantic similarity..." class="large-search">
+                    </div>
+                    <div class="search-results" id="search-results">
+                        <!-- Populated by JS -->
+                        <div class="empty-state">Enter a query to search memories</div>
+                    </div>
+                </div>
+
+                <!-- Consolidation View -->
+                <div class="view" id="view-consolidation">
+                    <div class="consolidation-hero card">
+                        <div class="hero-content">
+                            <h2>Memory Consolidation</h2>
+                            <p>Run the sleep cycle to merge redundant memories, decay old ephemeral facts, and synthesize insights.</p>
+                            <button id="btn-run-sleep" class="btn primary large">Run Sleep Cycle</button>
+                        </div>
+                        <div class="progress-container" id="consolidation-progress" style="display: none;">
+                            <div class="progress-label">Synthesizing...</div>
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="stats-grid mt-4">
+                        <div class="stat-card">
+                            <h3>Last Run</h3>
+                            <div class="stat-value text-muted" id="cons-last-run">Never</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Memories Merged</h3>
+                            <div class="stat-value" id="cons-merged">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Items Decayed</h3>
+                            <div class="stat-value" id="cons-decayed">0</div>
+                        </div>
+                    </div>
+                    <div class="card mt-4">
+                        <h3>Consolidation Log</h3>
+                        <div class="log-container" id="consolidation-log">
+                            <!-- Logs -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sync View -->
+                <div class="view" id="view-sync">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <h3>Pending Queue</h3>
+                            <div class="stat-value text-warning" id="sync-pending-count">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Last Sync</h3>
+                            <div class="stat-value" id="sync-last-time">Never</div>
+                        </div>
+                        <div class="card sync-actions">
+                            <button id="btn-toggle-connection" class="btn">Go Offline</button>
+                            <button id="btn-trigger-sync" class="btn primary">Trigger Sync</button>
+                            <button id="btn-inject-anomaly-sync" class="btn anomaly">⚡ Simulate Anomaly</button>
+                        </div>
+                    </div>
+
+                    <!-- Live Anomaly Notification Container -->
+                    <div id="sync-anomaly-alert-box" class="mt-4" style="display: none;"></div>
+
+                    <!-- Priority Fast-Path Queue -->
+                    <div class="card mt-4">
+                        <div class="card-header">
+                            <h3>⚡ Priority Fast-Path Queue (Novel Anomalies)</h3>
+                            <span class="badge anomaly">Fast-Path Trigger: Sim &lt; 0.70</span>
+                        </div>
+                        <div id="sync-priority-list" class="sim-lane-box" style="max-height: 200px; overflow-y: auto;">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Conflict Resolution & Sync Log -->
+                    <div class="card mt-4">
+                        <div class="card-header">
+                            <h3>Sync History & Conflict Resolution Log</h3>
+                            <span class="badge synced">Edge &harr; Cloud</span>
+                        </div>
+                        <div class="log-container" id="sync-log">
+                            <!-- Logs -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2D Robot Simulation View -->
+                <div class="view" id="view-simulation">
+                    <!-- Top Control Bar -->
+                    <div class="card sim-toolbar mb-4">
+                        <div class="sim-toolbar-left">
+                            <div class="sim-pill">
+                                <span class="sim-pill-label">Robot:</span>
+                                <span class="sim-pill-val" id="sim-stat-state" style="color:var(--signal-teal);font-weight:700">STANDBY</span>
+                            </div>
+                            <div class="sim-pill">
+                                <span class="sim-pill-label">Cargo:</span>
+                                <span class="sim-pill-val" id="sim-stat-cargo">0 / 3</span>
+                            </div>
+                            <div class="sim-pill">
+                                <span class="sim-pill-label">💾 Saved to Qdrant:</span>
+                                <span class="sim-pill-val text-success" id="sim-stat-saved-count">0</span>
+                            </div>
+                            <div class="sim-pill">
+                                <span class="sim-pill-label">⚡ Fast Lane:</span>
+                                <span class="sim-pill-val text-error" id="sim-stat-fast-count">0</span>
+                            </div>
+                            <div class="sim-pill">
+                                <span class="sim-pill-label">📦 Batch Queue:</span>
+                                <span class="sim-pill-val" id="sim-stat-batch-count">0</span>
+                            </div>
+                        </div>
+                        <div class="sim-toolbar-right">
+                            <button id="btn-sim-toggle" class="btn primary" style="background:var(--signal-teal);color:#FFFFFF;border:none;font-weight:600">▶ Start Mission</button>
+                            <button id="btn-sim-inject-anomaly" class="btn anomaly">⚡ Inject Hazard (Anomaly)</button>
+                            <button id="btn-sim-spawn-routine" class="btn">📦 Spawn Cargo</button>
+                            <button id="btn-sim-consolidate" class="btn" style="background:#F5A623;color:#FFF;border:none">🧬 Consolidate</button>
+                            <button id="btn-sim-reset" class="btn">🔄 Reset Arena</button>
+                        </div>
+                    </div>
+
+                    <!-- Main Arena Grid Layout -->
+                    <div class="sim-grid-layout">
+                        <!-- Left Column: Floor Canvas (22x13 @ 36px) -->
+                        <div class="card sim-arena-card">
+                            <div class="card-header">
+                                <h3>Warehouse Floor (22×13 Grid — Autonomous BFS Routing)</h3>
+                                <span class="badge synced">Radar Scan: 3.5 Cells</span>
+                            </div>
+                            <div class="canvas-wrapper">
+                                <canvas id="arena-canvas" width="792" height="468"></canvas>
+                            </div>
+                            <div class="arena-legend">
+                                <span><span class="legend-dot" style="background:#16213E"></span> Shelf Rack</span>
+                                <span><span class="legend-dot" style="background:#0FB8A0"></span> Dock (1,1)</span>
+                                <span><span class="legend-dot" style="background:#0FB8A0"></span> Routine Cargo</span>
+                                <span><span class="legend-dot" style="background:#E85D4A"></span> Hazard / Anomaly</span>
+                                <span><span class="legend-line"></span> Planned BFS Path</span>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Vector Intelligence & Sync Lanes -->
+                        <div class="sim-sidebar-panels">
+                            <!-- Card 1: 2D Memory Scatter Space -->
+                            <div class="card sim-scatter-card">
+                                <div class="card-header">
+                                    <h3>2D Vector Memory Space</h3>
+                                    <span class="badge local">Cosine Sim</span>
+                                </div>
+                                <div class="canvas-wrapper">
+                                    <canvas id="scatter-canvas" width="310" height="175"></canvas>
+                                </div>
+                                <div class="scatter-caption">
+                                    Dashed line links detected item to nearest stored memory. Anomaly if sim &lt; 0.55.
+                                </div>
+                            </div>
+
+                            <!-- Card 2: Dual Sync Lanes -->
+                            <div class="card sim-lanes-card">
+                                <h3>Dual Sync Dispatch Lanes</h3>
+                                <div class="sim-lanes-container">
+                                    <div class="sim-lane-section">
+                                        <div class="sim-lane-title text-error">⚡ Fast Lane (Priority Anomalies)</div>
+                                        <div id="sim-fast-lane-items" class="sim-lane-box"></div>
+                                    </div>
+                                    <div class="sim-lane-section mt-2">
+                                        <div class="sim-lane-title text-success">📦 Batch Lane (Routine Cargo)</div>
+                                        <div id="sim-batch-lane-items" class="sim-lane-box"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Card 3: Real-Time Audit Ticker -->
+                            <div class="card sim-ticker-card">
+                                <h3>Simulation Event Stream</h3>
+                                <div id="sim-log-stream" class="sim-ticker-stream"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Activity Log View -->
+                <div class="view" id="view-activity">
+                    <div class="card mb-4" style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <h2>Platform Activity Audit Trail</h2>
+                            <p style="color:var(--text-muted); font-size:0.875rem; margin-top:4px">Real-time chronological feed of vector intake, consolidation sleep cycles, anomaly detections, and cloud sync events.</p>
+                        </div>
+                        <div style="display:flex; gap:0.75rem;">
+                            <button class="btn" id="btn-refresh-activity">Refresh Log</button>
+                            <button type="button" class="btn anomaly" id="btn-inject-anomaly-activity">⚡ Simulate Anomaly</button>
+                        </div>
+                    </div>
+                    <div class="activity-feed" id="activity-feed">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="/static/app.js?v=2.5"></script>
+    <script src="/static/simulation.js?v=2.5"></script>
+</body>
+</html>
