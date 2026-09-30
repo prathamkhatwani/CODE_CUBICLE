@@ -26,6 +26,6 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='BA
 EXPOSE 8000
 
 ENV PYTHONUNBUFFERED=1
-ENV EDGE_EDGE_QDRANT_PATH="./qdrant_edge_data"
+ENV EDGE_QDRANT_PATH="./qdrant_edge_data"
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
