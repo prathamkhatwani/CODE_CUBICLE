@@ -3,10 +3,10 @@ Qdrant Edge vector store wrapper.
 
 Provides a clean API over qdrant-client for:
   • Creating / resetting collections
-  • Upserting memories (text → embed → store)
-  • Semantic + filtered search
-  • Scrolling / retrieving all records (needed by consolidation)
-  • Deleting records
+  • Upserting memories (text → embed → store) with version vectors & anomaly detection
+  • Semantic + filtered search (with tombstone soft-delete awareness)
+  • Scrolling / retrieving active & tombstoned records
+  • Deleting / restoring records
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
-    FilterSelector,
     MatchValue,
     PointStruct,
     Range,
@@ -35,16 +34,26 @@ logger = logging.getLogger(__name__)
 
 
 class QdrantStore:
-    """Thin facade over a local (edge) Qdrant instance."""
+    """Thin facade over a local (edge) or remote Qdrant instance."""
 
     def __init__(self, path: str | None = None, url: str | None = None):
         if url:
             self.client = QdrantClient(url=url, api_key=settings.CLOUD_QDRANT_API_KEY)
             self._mode = "cloud"
+        elif path == ":memory:":
+            self.client = QdrantClient(":memory:")
+            self._mode = "memory"
         else:
             self.client = QdrantClient(path=path or settings.EDGE_QDRANT_PATH)
             self._mode = "edge"
         logger.info("QdrantStore initialised in %s mode", self._mode)
+
+    def close(self) -> None:
+        """Close Qdrant client connection."""
+        try:
+            self.client.close()
+        except Exception:
+            pass
 
     # ── Collection management ────────────────────────────────────────────
 
@@ -82,18 +91,32 @@ class QdrantStore:
         If collection has items and nearest cosine similarity < ANOMALY_THRESHOLD,
         it is flagged as an anomaly.
         """
-        total = self.count()
+        total = self.count_active()
         if total == 0:
             return False, None
 
         try:
+            # Query non-tombstone points
+            query_filter = Filter(
+                must=[FieldCondition(key="is_tombstone", match=MatchValue(value=False))]
+            )
             response = self.client.query_points(
                 collection_name=settings.COLLECTION_NAME,
                 query=vector,
+                query_filter=query_filter,
                 limit=min(k, total),
                 with_payload=False,
                 with_vectors=False,
             )
+            if not response.points:
+                # If filter didn't match (e.g. legacy records without is_tombstone), fallback without filter
+                response = self.client.query_points(
+                    collection_name=settings.COLLECTION_NAME,
+                    query=vector,
+                    limit=min(k, total),
+                    with_payload=False,
+                    with_vectors=False,
+                )
             if not response.points:
                 return False, None
 
@@ -115,6 +138,8 @@ class QdrantStore:
         vector: list[float] | None = None,
         payload_overrides: dict[str, Any] | None = None,
         check_for_anomaly: bool = True,
+        lamport_clock: int = 1,
+        version_vector: dict[str, int] | None = None,
     ) -> tuple[str, bool, float | None]:
         """
         Embed text, check for anomaly against existing local vectors, and upsert.
@@ -143,6 +168,9 @@ class QdrantStore:
             priority=priority,
             priority_reason=priority_reason,
             nearest_similarity=nearest_sim,
+            lamport_clock=lamport_clock,
+            version_vector=version_vector or {settings.DEVICE_ID: lamport_clock},
+            is_tombstone=False,
         )
         if payload_overrides:
             payload.update(payload_overrides)
@@ -179,11 +207,16 @@ class QdrantStore:
         category: str | None = None,
         min_importance: float | None = None,
         include_local_only: bool = True,
+        include_tombstones: bool = False,
     ) -> list[MemoryResponse]:
-        """Semantic search with optional metadata filters."""
+        """Semantic search with optional metadata filters and soft-delete filtering."""
         query_vec = embedding_service.embed_text(query)
 
         conditions = []
+        if not include_tombstones:
+            conditions.append(
+                FieldCondition(key="is_tombstone", match=MatchValue(value=False))
+            )
         if category:
             conditions.append(
                 FieldCondition(key="category", match=MatchValue(value=category))
@@ -202,15 +235,27 @@ class QdrantStore:
 
         search_filter = Filter(must=conditions) if conditions else None
 
-        response = self.client.query_points(
-            collection_name=settings.COLLECTION_NAME,
-            query=query_vec,
-            query_filter=search_filter,
-            limit=limit,
-            with_payload=True,
-            with_vectors=False,
-        )
-        hits = response.points
+        try:
+            response = self.client.query_points(
+                collection_name=settings.COLLECTION_NAME,
+                query=query_vec,
+                query_filter=search_filter,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+            hits = response.points
+        except Exception:
+            # Fallback if filter on non-indexed field failed
+            response = self.client.query_points(
+                collection_name=settings.COLLECTION_NAME,
+                query=query_vec,
+                limit=limit * 2,
+                with_payload=True,
+                with_vectors=False,
+            )
+            hits = [h for h in response.points if not (h.payload.get("is_tombstone", False) and not include_tombstones)][:limit]
+
         return [self._hit_to_response(h) for h in hits]
 
     # ── Retrieve / scroll ────────────────────────────────────────────────
@@ -245,9 +290,14 @@ class QdrantStore:
         return results[0] if results else None
 
     def count(self) -> int:
-        """Total points in the collection."""
+        """Total points in the collection (including soft tombstones)."""
         info = self.client.get_collection(settings.COLLECTION_NAME)
         return info.points_count or 0
+
+    def count_active(self) -> int:
+        """Count active, non-tombstoned memories."""
+        all_pts = self.get_all_points(with_vectors=False)
+        return sum(1 for p in all_pts if not p.payload.get("is_tombstone", False))
 
     # ── Delete ───────────────────────────────────────────────────────────
 
@@ -273,7 +323,7 @@ class QdrantStore:
 
     @staticmethod
     def _hit_to_response(hit) -> MemoryResponse:
-        pl = hit.payload
+        pl = hit.payload or {}
         return MemoryResponse(
             id=str(hit.id),
             text=pl.get("text", ""),
@@ -294,12 +344,18 @@ class QdrantStore:
             priority=pl.get("priority", "normal"),
             priority_reason=pl.get("priority_reason"),
             nearest_similarity=pl.get("nearest_similarity"),
+            is_tombstone=pl.get("is_tombstone", False),
+            tombstone_at=pl.get("tombstone_at"),
+            undo_until=pl.get("undo_until"),
+            version_vector=pl.get("version_vector", {}),
+            lamport_clock=pl.get("lamport_clock", 1),
+            numeric_summary=pl.get("numeric_summary"),
             score=getattr(hit, "score", None),
         )
 
     @staticmethod
     def point_to_response(point) -> MemoryResponse:
-        pl = point.payload
+        pl = point.payload or {}
         return MemoryResponse(
             id=str(point.id),
             text=pl.get("text", ""),
@@ -320,4 +376,10 @@ class QdrantStore:
             priority=pl.get("priority", "normal"),
             priority_reason=pl.get("priority_reason"),
             nearest_similarity=pl.get("nearest_similarity"),
+            is_tombstone=pl.get("is_tombstone", False),
+            tombstone_at=pl.get("tombstone_at"),
+            undo_until=pl.get("undo_until"),
+            version_vector=pl.get("version_vector", {}),
+            lamport_clock=pl.get("lamport_clock", 1),
+            numeric_summary=pl.get("numeric_summary"),
         )

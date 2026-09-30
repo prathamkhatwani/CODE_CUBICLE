@@ -1,13 +1,12 @@
 """
 Sync Agent — bi-directional edge ↔ cloud synchronisation.
 
-• Detects connectivity by pinging the cloud Qdrant instance.
-• Pushes sync-eligible, un-synced (already consolidated) records to the cloud.
-• Pulls cloud updates back to the edge.
-• Resolves conflicts using vector-similarity merge (same logic as consolidation)
-  rather than naïve last-write-wins.
-• Retries with exponential backoff on transient failures.
-• Idempotent writes via content-hash dedup to prevent duplicate vectors.
+Capabilities:
+• Detects connectivity by pinging the cloud Qdrant instance with auto fallback.
+• Fast-path priority sync for novel anomalies (Sim < 0.70) without waiting for sleep cycle.
+• Version Vector & Lamport Logical Clock conflict resolution (eliminates device wall-clock skew).
+• Exponential backoff retry on network drops.
+• Idempotent payload tagging and bi-directional vector reconciliation.
 """
 
 from __future__ import annotations
@@ -142,6 +141,7 @@ class SyncAgent:
                     "pushed": pushed,
                     "pulled": pulled,
                     "conflicts": conflicts,
+                    "conflict_details": result.conflict_details,
                 },
             )
 
@@ -187,6 +187,7 @@ class SyncAgent:
                 p = self.edge.get_point(point_id)
                 if (
                     p
+                    and not p.payload.get("is_tombstone", False)
                     and p.payload.get("sync_eligibility") == SyncEligibility.SYNC_ELIGIBLE.value
                     and not p.payload.get("synced", False)
                 ):
@@ -195,7 +196,8 @@ class SyncAgent:
                 all_points = self.edge.get_all_points(with_vectors=True)
                 points_to_sync = [
                     p for p in all_points
-                    if p.payload.get("priority") == "high"
+                    if not p.payload.get("is_tombstone", False)
+                    and p.payload.get("priority") == "high"
                     and p.payload.get("sync_eligibility") == SyncEligibility.SYNC_ELIGIBLE.value
                     and not p.payload.get("synced", False)
                 ]
@@ -211,6 +213,11 @@ class SyncAgent:
                 payload["source_device"] = settings.DEVICE_ID
                 payload["synced_at"] = datetime.now(timezone.utc).isoformat()
                 payload["sync_path"] = "priority_fast_path"
+                # Update version vector
+                vv = payload.get("version_vector", {})
+                vv[settings.DEVICE_ID] = vv.get(settings.DEVICE_ID, 0) + 1
+                payload["version_vector"] = vv
+                payload["lamport_clock"] = payload.get("lamport_clock", 1) + 1
                 points_data.append((str(p.id), list(p.vector), payload))
 
             self.cloud.upsert_points_batch(points_data)
@@ -265,12 +272,13 @@ class SyncAgent:
     # ── Push (edge → cloud) ──────────────────────────────────────────────
 
     def _push_to_cloud(self, result: SyncResult) -> int:
-        """Push sync-eligible, unsynced records from edge to cloud, prioritizing high-priority items."""
+        """Push sync-eligible, unsynced active records from edge to cloud."""
         all_points = self.edge.get_all_points(with_vectors=True)
 
         eligible = [
             p for p in all_points
-            if p.payload.get("sync_eligibility") == SyncEligibility.SYNC_ELIGIBLE.value
+            if not p.payload.get("is_tombstone", False)
+            and p.payload.get("sync_eligibility") == SyncEligibility.SYNC_ELIGIBLE.value
             and not p.payload.get("synced", False)
         ]
 
@@ -293,7 +301,6 @@ class SyncAgent:
                 try:
                     points_data = []
                     for p in batch:
-                        # Idempotency: hash content to detect dupes
                         payload = dict(p.payload)
                         payload["source_device"] = settings.DEVICE_ID
                         payload["synced_at"] = datetime.now(timezone.utc).isoformat()
@@ -328,7 +335,7 @@ class SyncAgent:
     # ── Pull (cloud → edge) ──────────────────────────────────────────────
 
     def _pull_from_cloud(self, result: SyncResult) -> tuple[int, int]:
-        """Pull records from cloud and merge into edge store."""
+        """Pull records from cloud and merge into edge store using Version Vector conflict resolution."""
         cloud_points = self.cloud.get_all_points(with_vectors=True)
         if not cloud_points:
             return 0, 0
@@ -340,11 +347,10 @@ class SyncAgent:
             cp_id = str(cp.id)
             cp_device = cp.payload.get("source_device", "")
 
-            # Skip records that originated from this device
-            if cp_device == settings.DEVICE_ID:
+            # Skip records that originated from this device and have no external edits
+            if cp_device == settings.DEVICE_ID and not cp.payload.get("has_remote_updates", False):
                 continue
 
-            # Check if we already have this record locally
             local = self.edge.get_point(cp_id)
 
             if local is None:
@@ -352,64 +358,129 @@ class SyncAgent:
                 self.edge.upsert_point(cp_id, list(cp.vector), dict(cp.payload))
                 pulled += 1
             else:
-                # Conflict: same ID exists locally and in cloud
-                resolved_payload = self._resolve_conflict(local, cp)
+                # Same record exists both locally and in cloud — check Version Vectors
+                resolved_payload, resolution_info = self._resolve_version_vector_conflict(local, cp)
                 if resolved_payload:
-                    # Average vectors for merge
+                    # Average vectors for semantic convergence
                     avg_vec = embedding_service.average_vectors(
                         [list(local.vector), list(cp.vector)]
                     )
                     self.edge.upsert_point(cp_id, avg_vec, resolved_payload)
                     conflicts += 1
+                    result.conflict_details.append({
+                        "record_id": cp_id,
+                        "local_device": settings.DEVICE_ID,
+                        "remote_device": cp_device,
+                        "resolution": resolution_info,
+                    })
                     activity_log.log(
                         ActivityType.CONFLICT_RESOLVED,
-                        "Conflict resolved",
+                        "Conflict resolved (Version Vector)",
                         (
-                            f"Record {cp_id[:8]}… edited on both {settings.DEVICE_ID} "
-                            f"and {cp_device}. Merged using similarity-based resolution."
+                            f"Record {cp_id[:8]} edited concurrently. Resolved via {resolution_info}."
                         ),
                         {
                             "record_id": cp_id,
                             "local_device": settings.DEVICE_ID,
                             "remote_device": cp_device,
+                            "resolution": resolution_info,
                         },
                     )
 
         return pulled, conflicts
 
-    # ── Conflict resolution ──────────────────────────────────────────────
+    # ── Conflict Resolution: Version Vectors & Lamport Clocks ────────────
 
     @staticmethod
-    def _resolve_conflict(local_point, cloud_point) -> dict[str, Any] | None:
+    def _compare_version_vectors(vv_a: dict[str, int], vv_b: dict[str, int]) -> str:
         """
-        Resolve same-record edits from different devices.
-        Strategy: keep the higher-importance, fresher version's text,
-        but merge metadata (tags, importance = max).
+        Compare two version vectors:
+        Returns:
+          - "A_DOMINATES" if A >= B for all keys and A > B for at least one
+          - "B_DOMINATES" if B >= A for all keys and B > A for at least one
+          - "IDENTICAL" if A == B
+          - "CONCURRENT" if neither dominates (split-brain concurrent edits)
         """
-        lp = local_point.payload
-        cp = cloud_point.payload
+        all_keys = set(vv_a.keys()) | set(vv_b.keys())
+        a_greater = False
+        b_greater = False
 
-        local_time = lp.get("updated_at", "")
-        cloud_time = cp.get("updated_at", "")
+        for k in all_keys:
+            v_a = vv_a.get(k, 0)
+            v_b = vv_b.get(k, 0)
+            if v_a > v_b:
+                a_greater = True
+            elif v_b > v_a:
+                b_greater = True
 
-        # If nothing actually changed, skip
-        if lp.get("text") == cp.get("text") and local_time >= cloud_time:
-            return None
+        if a_greater and not b_greater:
+            return "A_DOMINATES"
+        elif b_greater and not a_greater:
+            return "B_DOMINATES"
+        elif not a_greater and not b_greater:
+            return "IDENTICAL"
+        else:
+            return "CONCURRENT"
 
-        # Merge: take the fresher text, merge tags, max importance
-        base = lp if local_time >= cloud_time else cp
+    @classmethod
+    def _resolve_version_vector_conflict(
+        cls, local_point, cloud_point
+    ) -> tuple[dict[str, Any] | None, str]:
+        """
+        Resolve concurrency using Version Vectors + Lamport Logical Clocks.
+        """
+        lp = local_point.payload or {}
+        cp = cloud_point.payload or {}
+
+        vv_local = lp.get("version_vector", {settings.DEVICE_ID: lp.get("lamport_clock", 1)})
+        vv_cloud = cp.get("version_vector", {cp.get("source_device", "server"): cp.get("lamport_clock", 1)})
+
+        relation = cls._compare_version_vectors(vv_local, vv_cloud)
+
+        if relation == "IDENTICAL":
+            return None, "identical_version_vectors"
+
+        if relation == "A_DOMINATES":
+            # Local is strictly newer; keep local
+            return None, "local_dominates_version_vector"
+
+        if relation == "B_DOMINATES":
+            # Cloud is strictly newer; adopt cloud payload
+            adopted = dict(cp)
+            adopted["synced"] = True
+            return adopted, "cloud_dominates_version_vector"
+
+        # CONCURRENT (split-brain): Merge metadata and choose best text
+        merged_vv = {}
+        all_keys = set(vv_local.keys()) | set(vv_cloud.keys())
+        for k in all_keys:
+            merged_vv[k] = max(vv_local.get(k, 0), vv_cloud.get(k, 0))
+
+        merged_clock = max(lp.get("lamport_clock", 1), cp.get("lamport_clock", 1)) + 1
+        merged_vv[settings.DEVICE_ID] = merged_clock
+
+        # Deterministic winner: highest importance, then consolidated, then longest text
+        score_local = (lp.get("importance", 0.5) * 2.0) + (1.0 if lp.get("is_consolidated") else 0.0)
+        score_cloud = (cp.get("importance", 0.5) * 2.0) + (1.0 if cp.get("is_consolidated") else 0.0)
+
+        base = lp if score_local >= score_cloud else cp
+
         merged = dict(base)
         merged["tags"] = list(set(lp.get("tags", []) + cp.get("tags", [])))
-        merged["importance"] = max(
-            lp.get("importance", 0.5), cp.get("importance", 0.5)
-        )
-        merged["merge_count"] = (
-            lp.get("merge_count", 1) + cp.get("merge_count", 1)
-        )
-        merged["updated_at"] = datetime.now(timezone.utc).isoformat()
+        merged["importance"] = max(lp.get("importance", 0.5), cp.get("importance", 0.5))
+        merged["merge_count"] = lp.get("merge_count", 1) + cp.get("merge_count", 1)
+        merged["version_vector"] = merged_vv
+        merged["lamport_clock"] = merged_clock
         merged["is_consolidated"] = True
+        merged["synced"] = True
+        merged["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        return merged
+        # Mixed PII check
+        if lp.get("pii_detected") or cp.get("pii_detected"):
+            merged["pii_detected"] = True
+            merged["sync_eligibility"] = SyncEligibility.LOCAL_ONLY.value
+
+        return merged, "concurrent_merged_version_vectors"
 
     # ── Stats helpers ────────────────────────────────────────────────────
 
@@ -418,10 +489,11 @@ class SyncAgent:
         all_pts = self.edge.get_all_points(with_vectors=False)
         return sum(
             1 for p in all_pts
-            if p.payload.get("sync_eligibility") == SyncEligibility.SYNC_ELIGIBLE.value
+            if not p.payload.get("is_tombstone", False)
+            and p.payload.get("sync_eligibility") == SyncEligibility.SYNC_ELIGIBLE.value
             and not p.payload.get("synced", False)
         )
 
     def get_synced_count(self) -> int:
         all_pts = self.edge.get_all_points(with_vectors=False)
-        return sum(1 for p in all_pts if p.payload.get("synced", False))
+        return sum(1 for p in all_pts if not p.payload.get("is_tombstone", False) and p.payload.get("synced", False))

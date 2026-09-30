@@ -1,28 +1,42 @@
-# Docker Compose for Edge Memory & Intelligence Platform
-#
-# This runs the "cloud" Qdrant Server that the edge device syncs to.
-# The edge device itself runs Qdrant embedded (via qdrant-client path mode)
-# so it needs NO container — just the Python app.
-#
-# Usage:
-#   docker-compose up -d        # start cloud Qdrant
-#   cd backend && python main.py  # start the edge platform
-
-version: "3.9"
-
 services:
-  # ── Cloud Qdrant Server (sync target) ──────────────────────────────
-  qdrant-cloud:
-    image: qdrant/qdrant:latest
-    container_name: qdrant-cloud
+  # Central Cloud Qdrant Instance
+  cloud-qdrant:
+    image: qdrant/qdrant:v1.12.1
+    container_name: cortex-cloud-qdrant
     ports:
-      - "6333:6333"   # REST API
-      - "6334:6334"   # gRPC
+      - "6333:6333" # HTTP REST API
+      - "6334:6334" # gRPC API
     volumes:
-      - qdrant_cloud_data:/qdrant/storage
+      - qdrant_cloud_storage:/qdrant/storage
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # CORTEX Edge Memory Node Application
+  edge-platform:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cortex-edge-node
+    ports:
+      - "8000:8000"
+    environment:
+      - EDGE_CLOUD_QDRANT_URL=http://cloud-qdrant:6334
+      - EDGE_DEVICE_ID=edge-docker-01
+      - EDGE_DEVICE_NAME=Edge Node Container
+      - EDGE_DEMO_MODE=true
+    volumes:
+      - edge_storage:/app/backend/qdrant_edge_data
+    depends_on:
+      cloud-qdrant:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
-  qdrant_cloud_data:
+  qdrant_cloud_storage:
+  edge_storage:

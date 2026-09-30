@@ -22,11 +22,13 @@ class SyncEligibility(str, Enum):
 class ActivityType(str, Enum):
     MEMORY_ADDED = "memory_added"
     MEMORY_DELETED = "memory_deleted"
+    MEMORY_RESTORED = "memory_restored"
     SEARCH_PERFORMED = "search_performed"
     CONSOLIDATION_STARTED = "consolidation_started"
     CONSOLIDATION_COMPLETED = "consolidation_completed"
     MEMORIES_MERGED = "memories_merged"
     MEMORY_DECAYED = "memory_decayed"
+    MEMORY_TOMBSTONED = "memory_tombstoned"
     MEMORY_TAGGED_LOCAL = "memory_tagged_local"
     ANOMALY_DETECTED = "anomaly_detected"
     PRIORITY_SYNC = "priority_sync"
@@ -69,6 +71,12 @@ class MemoryResponse(BaseModel):
     priority: str = "normal"  # "normal" | "high"
     priority_reason: str | None = None  # e.g. "anomaly"
     nearest_similarity: float | None = None
+    is_tombstone: bool = False
+    tombstone_at: str | None = None
+    undo_until: str | None = None
+    version_vector: dict[str, int] = Field(default_factory=dict)
+    lamport_clock: int = 1
+    numeric_summary: dict[str, Any] | None = None
     score: float | None = None  # search relevance score
 
 
@@ -78,6 +86,7 @@ class SearchRequest(BaseModel):
     category: str | None = None
     min_importance: float | None = None
     include_local_only: bool = True
+    include_tombstones: bool = False
 
 
 class SearchResponse(BaseModel):
@@ -96,6 +105,7 @@ class ConsolidationResult(BaseModel):
     clusters_found: int = 0
     records_merged: int = 0
     records_decayed: int = 0
+    records_tombstoned: int = 0
     records_tagged_local: int = 0
     merge_details: list[MergeDetail] = Field(default_factory=list)
     decay_details: list[DecayDetail] = Field(default_factory=list)
@@ -109,6 +119,8 @@ class MergeDetail(BaseModel):
     merged_id: str
     merged_text: str
     similarity: float
+    numeric_summary: dict[str, Any] | None = None
+    mixed_pii_protected: bool = False
 
 
 class DecayDetail(BaseModel):
@@ -116,7 +128,8 @@ class DecayDetail(BaseModel):
     text_preview: str
     old_decay_score: float
     new_decay_score: float
-    action: str  # "decayed" or "dropped"
+    action: str  # "decayed", "tombstoned", or "purged"
+    undo_until: str | None = None
 
 
 # Forward ref resolution
@@ -130,6 +143,7 @@ class SyncResult(BaseModel):
     records_pushed: int = 0
     records_pulled: int = 0
     conflicts_resolved: int = 0
+    conflict_details: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     status: str = "running"
 
@@ -154,12 +168,15 @@ class DeviceStatus(BaseModel):
     synced_memories: int
     pending_sync: int
     local_only_memories: int
+    tombstone_count: int = 0
     avg_decay_score: float
     last_consolidation: str | None = None
     last_sync: str | None = None
     uptime_seconds: float
     embedding_model: str
     vector_dimensions: int
+    demo_mode: bool = True
+    auth_enabled: bool = False
 
 
 class DashboardStats(BaseModel):
@@ -167,6 +184,7 @@ class DashboardStats(BaseModel):
     synced_count: int
     pending_count: int
     local_only_count: int
+    tombstone_count: int = 0
     avg_decay_score: float
     avg_importance: float
     categories: dict[str, int]
@@ -196,6 +214,12 @@ def build_payload(
     priority: str = "normal",
     priority_reason: str | None = None,
     nearest_similarity: float | None = None,
+    is_tombstone: bool = False,
+    tombstone_at: str | None = None,
+    undo_until: str | None = None,
+    version_vector: dict[str, int] | None = None,
+    lamport_clock: int = 1,
+    numeric_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a Qdrant-compatible payload dict for a memory record."""
     now = datetime.now(timezone.utc).isoformat()
@@ -220,5 +244,11 @@ def build_payload(
         "priority": priority,
         "priority_reason": priority_reason,
         "nearest_similarity": nearest_similarity,
+        "is_tombstone": is_tombstone,
+        "tombstone_at": tombstone_at,
+        "undo_until": undo_until,
+        "version_vector": version_vector or {device_id: 1},
+        "lamport_clock": lamport_clock,
+        "numeric_summary": numeric_summary,
         "metadata": metadata or {},
     }

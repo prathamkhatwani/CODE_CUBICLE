@@ -11,10 +11,12 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Security, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
 from activity_log import activity_log
@@ -46,6 +48,20 @@ edge_store: QdrantStore | None = None
 cloud_store: QdrantStore | None = None
 consolidation_engine: ConsolidationEngine | None = None
 sync_agent: SyncAgent | None = None
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def verify_auth(x_api_key: str | None = Security(api_key_header)):
+    """Authenticate API requests when AUTH_ENABLED is True."""
+    if not settings.AUTH_ENABLED:
+        return True
+    if not x_api_key or x_api_key != settings.API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key. Provide a valid 'X-API-Key' header.",
+        )
+    return True
 
 
 @asynccontextmanager
@@ -91,7 +107,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Edge Memory & Intelligence Platform",
     description="AI-powered offline-first vector memory with consolidation and sync.",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -145,19 +161,21 @@ async def serve_app_js():
 @app.get("/api/status", response_model=DeviceStatus)
 async def get_status():
     all_pts = edge_store.get_all_points(with_vectors=False)
-    total = len(all_pts)
-    synced = sum(1 for p in all_pts if p.payload.get("synced", False))
+    active_pts = [p for p in all_pts if not p.payload.get("is_tombstone", False)]
+    tombstones = [p for p in all_pts if p.payload.get("is_tombstone", False)]
+    total = len(active_pts)
+    synced = sum(1 for p in active_pts if p.payload.get("synced", False))
     pending = sum(
-        1 for p in all_pts
+        1 for p in active_pts
         if p.payload.get("sync_eligibility") == "sync_eligible"
         and not p.payload.get("synced", False)
     )
     local_only = sum(
-        1 for p in all_pts
+        1 for p in active_pts
         if p.payload.get("sync_eligibility") == "local_only"
     )
     avg_decay = (
-        sum(p.payload.get("decay_score", 1.0) for p in all_pts) / total
+        sum(p.payload.get("decay_score", 1.0) for p in active_pts) / total
         if total > 0
         else 0.0
     )
@@ -181,20 +199,29 @@ async def get_status():
         synced_memories=synced,
         pending_sync=pending,
         local_only_memories=local_only,
+        tombstone_count=len(tombstones),
         avg_decay_score=round(avg_decay, 3),
         last_consolidation=last_consol,
         last_sync=last_sync,
         uptime_seconds=round(time.time() - _start_time, 1),
         embedding_model=settings.EMBEDDING_MODEL,
         vector_dimensions=settings.VECTOR_SIZE,
+        demo_mode=settings.DEMO_MODE,
+        auth_enabled=settings.AUTH_ENABLED,
     )
 
 
 # ── Memories CRUD ────────────────────────────────────────────────────────────
 
 @app.get("/api/memories", response_model=list[MemoryResponse])
-async def list_memories(limit: int = 100, category: str | None = None):
+async def list_memories(
+    limit: int = 100,
+    category: str | None = None,
+    include_tombstones: bool = False,
+):
     all_pts = edge_store.get_all_points(with_vectors=False)
+    if not include_tombstones:
+        all_pts = [p for p in all_pts if not p.payload.get("is_tombstone", False)]
     if category:
         all_pts = [p for p in all_pts if p.payload.get("category") == category]
     # Sort by created_at descending
@@ -203,7 +230,7 @@ async def list_memories(limit: int = 100, category: str | None = None):
 
 
 @app.post("/api/memories", response_model=MemoryResponse)
-async def add_memory(mem: MemoryCreate):
+async def add_memory(mem: MemoryCreate, _: bool = Depends(verify_auth)):
     pid, is_anomaly, nearest_sim = edge_store.add_memory(
         text=mem.text,
         source=mem.source,
@@ -281,8 +308,17 @@ async def get_memory(memory_id: str):
     return edge_store.point_to_response(point)
 
 
+@app.post("/api/memories/{memory_id}/restore")
+async def restore_memory(memory_id: str, _: bool = Depends(verify_auth)):
+    """Restore a soft-deleted tombstoned memory within its undo window."""
+    success = consolidation_engine.restore_tombstone(memory_id)
+    if not success:
+        raise HTTPException(400, "Memory is not a valid recoverable tombstone or already purged.")
+    return {"status": "restored", "memory_id": memory_id}
+
+
 @app.delete("/api/memories/{memory_id}")
-async def delete_memory(memory_id: str):
+async def delete_memory(memory_id: str, _: bool = Depends(verify_auth)):
     point = edge_store.get_point(memory_id)
     if not point:
         raise HTTPException(404, "Memory not found")
@@ -306,6 +342,7 @@ async def search_memories(req: SearchRequest):
         category=req.category,
         min_importance=req.min_importance,
         include_local_only=req.include_local_only,
+        include_tombstones=req.include_tombstones,
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
@@ -327,7 +364,7 @@ async def search_memories(req: SearchRequest):
 # ── Consolidation ───────────────────────────────────────────────────────────
 
 @app.post("/api/consolidate")
-async def run_consolidation():
+async def run_consolidation(_: bool = Depends(verify_auth)):
     """Trigger the consolidation 'sleep cycle'."""
     result = consolidation_engine.run()
     return result
@@ -341,7 +378,7 @@ async def consolidation_history():
 # ── Sync ─────────────────────────────────────────────────────────────────────
 
 @app.post("/api/sync")
-async def run_sync():
+async def run_sync(_: bool = Depends(verify_auth)):
     result = sync_agent.sync()
     return result
 
@@ -385,25 +422,27 @@ async def get_activity(limit: int = 50, activity_type: str | None = None):
 @app.get("/api/stats", response_model=DashboardStats)
 async def get_stats():
     all_pts = edge_store.get_all_points(with_vectors=False)
-    total = len(all_pts)
+    active_pts = [p for p in all_pts if not p.payload.get("is_tombstone", False)]
+    tombstones = [p for p in all_pts if p.payload.get("is_tombstone", False)]
+    total = len(active_pts)
 
-    synced = sum(1 for p in all_pts if p.payload.get("synced", False))
+    synced = sum(1 for p in active_pts if p.payload.get("synced", False))
     pending = sum(
-        1 for p in all_pts
+        1 for p in active_pts
         if p.payload.get("sync_eligibility") == "sync_eligible"
         and not p.payload.get("synced", False)
     )
     local_only = sum(
-        1 for p in all_pts if p.payload.get("sync_eligibility") == "local_only"
+        1 for p in active_pts if p.payload.get("sync_eligibility") == "local_only"
     )
 
     avg_decay = (
-        sum(p.payload.get("decay_score", 1.0) for p in all_pts) / total
+        sum(p.payload.get("decay_score", 1.0) for p in active_pts) / total
         if total
         else 0.0
     )
     avg_imp = (
-        sum(p.payload.get("importance", 0.5) for p in all_pts) / total
+        sum(p.payload.get("importance", 0.5) for p in active_pts) / total
         if total
         else 0.0
     )
@@ -411,7 +450,7 @@ async def get_stats():
     # Category breakdown
     categories: dict[str, int] = {}
     sources: dict[str, int] = {}
-    for p in all_pts:
+    for p in active_pts:
         cat = p.payload.get("category", "general")
         categories[cat] = categories.get(cat, 0) + 1
         src = p.payload.get("source", "unknown")
@@ -433,6 +472,7 @@ async def get_stats():
         synced_count=synced,
         pending_count=pending,
         local_only_count=local_only,
+        tombstone_count=len(tombstones),
         avg_decay_score=round(avg_decay, 3),
         avg_importance=round(avg_imp, 3),
         categories=categories,
@@ -443,7 +483,17 @@ async def get_stats():
     )
 
 
-# ── Seed Data ────────────────────────────────────────────────────────────────
+# ── Benchmark Endpoint ───────────────────────────────────────────────────────
+
+@app.get("/api/benchmark")
+async def run_benchmark():
+    """Run an automated benchmark demonstrating deduplication ratio, search MRR, and payload savings."""
+    import benchmark
+    results = benchmark.run_benchmark_suite(edge_store, consolidation_engine)
+    return results
+
+
+# ── Seed Data & Reset ────────────────────────────────────────────────────────
 
 @app.post("/api/seed")
 async def seed_data():
@@ -453,8 +503,15 @@ async def seed_data():
 
 
 @app.post("/api/reset")
-async def reset_all():
-    """Reset the edge store and all history. For demo use."""
+async def reset_all(x_api_key: str | None = Header(None)):
+    """Reset the edge store and all history. Protected in production mode."""
+    if not settings.DEMO_MODE:
+        if not x_api_key or x_api_key != settings.API_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Reset endpoint is disabled in production mode. Set DEMO_MODE=True or provide admin API key.",
+            )
+
     edge_store.reset_collection()
     consolidation_engine.history.clear()
     sync_agent.history.clear()

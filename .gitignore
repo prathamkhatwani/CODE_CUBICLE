@@ -8,11 +8,17 @@ env/
 venv/
 ENV/
 .venv
+.pytest_cache/
 
 # Qdrant local storage databases
 backend/qdrant_edge_data/
 backend/qdrant_cloud_data/
 backend/test_db/
+backend/benchmark_qdrant_data/
+qdrant_cloud_data/
+qdrant_edge_data/
+test_qdrant_data/
+test_cloud_qdrant_data/
 *.lock
 
 # IDE & OS

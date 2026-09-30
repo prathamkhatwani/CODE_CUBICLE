@@ -24,21 +24,31 @@ class Settings:
     # ── Consolidation ("sleep cycle") ──
     SIMILARITY_THRESHOLD: float = 0.85      # cosine sim to count as near-duplicate
     DECAY_RATE_PER_HOUR: float = 0.02       # how fast memories age
-    DECAY_THRESHOLD: float = 0.15           # below this → drop the memory
+    DECAY_THRESHOLD: float = 0.15           # below this → soft-delete to tombstone
     MIN_CLUSTER_SIZE: int = 2               # minimum records to form a cluster
+    CLUSTERING_METHOD: str = "greedy_hnsw"  # "greedy_hnsw" or "capped_diameter"
+    MAX_CLUSTER_DIAMETER: float = 0.25      # max cosine distance between any 2 items in a cluster
+    NUMERIC_TOLERANCE_PCT: float = 0.15     # 15% tolerance for merging numeric sensor readings
+
+    # ── Soft-Delete & Tombstones ──
+    TOMBSTONE_UNDO_WINDOW_SECONDS: int = 300  # 5 minutes undo window before permanent purge
 
     # ── Anomaly Detection (Priority Sync) ──
-    ANOMALY_THRESHOLD: float = 0.70         # max similarity to nearest neighbor to trigger anomaly fast-path (tuned for bge-small)
+    ANOMALY_THRESHOLD: float = 0.70         # max similarity to nearest neighbor to trigger anomaly fast-path (bge-small tuned)
     ANOMALY_K: int = 5                      # number of neighbors to query on insert
 
-    # ── Sync ──
+    # ── Sync & Conflict Resolution ──
     SYNC_BATCH_SIZE: int = 50
     RETRY_MAX: int = 5
     RETRY_BACKOFF_BASE: float = 2.0
+    CONFLICT_STRATEGY: str = "version_vector" # "version_vector" or "server_timestamp"
 
-    # ── Device identity ──
+    # ── Device Identity & Auth ──
     DEVICE_ID: str = "edge-001"
     DEVICE_NAME: str = "Edge Device Alpha"
+    DEMO_MODE: bool = True                  # When False, /api/reset is disabled or requires auth
+    AUTH_ENABLED: bool = False              # Set to True to enforce API_KEY
+    API_KEY: str = "cortex-edge-secret-key-2026"
 
     # ── PII patterns (simple regex-based detection) ──
     PII_PATTERNS: list[str] = field(default_factory=lambda: [
@@ -56,7 +66,9 @@ class Settings:
             env_val = os.environ.get(env_key)
             if env_val is not None:
                 current = getattr(self, attr_name)
-                if isinstance(current, float):
+                if isinstance(current, bool):
+                    setattr(self, attr_name, env_val.lower() in ("true", "1", "yes"))
+                elif isinstance(current, float):
                     setattr(self, attr_name, float(env_val))
                 elif isinstance(current, int):
                     setattr(self, attr_name, int(env_val))
