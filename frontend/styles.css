@@ -692,18 +692,56 @@ input:focus, select:focus, textarea:focus {
     border-radius: 3px;
 }
 
-.decay-circle {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    display: flex;
+.decay-pill {
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
-    font-size: 0.75rem;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 700;
     font-family: var(--font-mono);
-    font-weight: 600;
-    border: 2px solid var(--signal-teal);
-    background: #FFFFFF;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    width: fit-content;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.decay-pill .decay-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.decay-pill.healthy {
+    background: var(--signal-teal-bg);
+    color: var(--signal-teal);
+    border: 1px solid var(--signal-teal-border);
+}
+.decay-pill.healthy .decay-dot {
+    background: var(--signal-teal);
+    box-shadow: 0 0 6px rgba(15, 184, 160, 0.45);
+}
+
+.decay-pill.aging {
+    background: var(--amber-pending-bg);
+    color: var(--amber-pending);
+    border: 1px solid var(--amber-pending-border);
+}
+.decay-pill.aging .decay-dot {
+    background: var(--amber-pending);
+    box-shadow: 0 0 6px rgba(245, 166, 35, 0.45);
+}
+
+.decay-pill.stale {
+    background: var(--coral-local-bg);
+    color: var(--coral-local);
+    border: 1px solid var(--coral-local-border);
+}
+.decay-pill.stale .decay-dot {
+    background: var(--coral-local);
+    box-shadow: 0 0 6px rgba(232, 93, 74, 0.45);
 }
 
 /* ── Forms ──────────────────────────────────────────────────────────────── */

@@ -87,13 +87,21 @@ function importanceBar(val) {
 }
 
 function decayIndicator(val) {
-    let color = '#0FB8A0'; // Signal Teal (healthy)
+    let state = 'healthy';
+    let label = 'Fresh';
     if (val < 0.4) {
-        color = '#E85D4A'; // Coral (stale / near drop threshold)
+        state = 'stale';
+        label = 'Stale';
     } else if (val < 0.75) {
-        color = '#F5A623'; // Amber (aging)
+        state = 'aging';
+        label = 'Aging';
     }
-    return `<div class="decay-circle" style="border-color:${color};color:${color}">${val.toFixed(2)}</div>`;
+    return `
+        <div class="decay-pill ${state}" title="Decay retention score: ${val.toFixed(2)} (${label})">
+            <span class="decay-dot"></span>
+            <span>${val.toFixed(2)}</span>
+        </div>
+    `;
 }
 
 
