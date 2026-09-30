@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CORTEX | Edge Memory Platform</title>
-    <link rel="stylesheet" href="/static/styles.css?v=2.6">
+    <link rel="stylesheet" href="/static/styles.css?v=2.7">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -248,19 +248,76 @@
 
                 <!-- Sync View -->
                 <div class="view" id="view-sync">
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <h3>Pending Queue</h3>
-                            <div class="stat-value text-warning" id="sync-pending-count">0</div>
+                    <!-- Real-Time Fiber-Optic Sync Highway Component -->
+                    <div class="card sync-bridge-card mb-4">
+                        <div class="card-header">
+                            <div>
+                                <h3>⚡ Real-Time Fiber-Optic Sync Highway</h3>
+                                <p style="color:var(--text-muted); font-size:0.8rem; margin-top:2px">Live bidirectional vector bridge between edge Qdrant and central cloud server with sub-millisecond anomaly fast-track.</p>
+                            </div>
+                            <div style="display:flex; align-items:center; gap:0.6rem;">
+                                <button id="btn-toggle-connection" class="btn">Go Offline</button>
+                                <button id="btn-trigger-sync" class="btn primary">Trigger Sync</button>
+                                <button id="btn-inject-anomaly-sync" class="btn anomaly">⚡ Simulate Anomaly</button>
+                            </div>
                         </div>
-                        <div class="stat-card">
-                            <h3>Last Sync</h3>
-                            <div class="stat-value" id="sync-last-time">Never</div>
-                        </div>
-                        <div class="card sync-actions">
-                            <button id="btn-toggle-connection" class="btn">Go Offline</button>
-                            <button id="btn-trigger-sync" class="btn primary">Trigger Sync</button>
-                            <button id="btn-inject-anomaly-sync" class="btn anomaly">⚡ Simulate Anomaly</button>
+
+                        <!-- Interactive Bridge Diagram -->
+                        <div class="sync-pipeline-container" id="sync-pipeline-container">
+                            <!-- Left Node: Edge -->
+                            <div class="sync-node-card edge-node">
+                                <div class="node-badge-top">EDGE VECTOR STORE</div>
+                                <div class="node-title">Node-Alpha (Qdrant Edge)</div>
+                                <div class="node-metrics">
+                                    <div class="node-metric-row">
+                                        <span>Status:</span>
+                                        <strong class="text-success" id="sync-edge-status">ACTIVE (384-d)</strong>
+                                    </div>
+                                    <div class="node-metric-row">
+                                        <span>Pending Queue:</span>
+                                        <strong class="text-warning" id="sync-pending-count">0</strong>
+                                    </div>
+                                    <div class="node-metric-row">
+                                        <span>Version Vector:</span>
+                                        <strong style="font-family:var(--font-mono); font-size:0.75rem" id="sync-edge-vv">{alpha: 12}</strong>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Center: Fiber Pipe with Animated Data Packets -->
+                            <div class="sync-fiber-channel" id="sync-fiber-channel">
+                                <div class="fiber-line" id="fiber-line"></div>
+                                <div class="fiber-packets-layer" id="fiber-packets-layer">
+                                    <!-- Dynamic animated particles injected by JS -->
+                                </div>
+                                <div class="fiber-status-badge" id="fiber-status-badge">
+                                    <span class="fiber-pulse-dot online" id="fiber-dot"></span>
+                                    <span id="fiber-status-text">⚡ FIBER PIPELINE: ONLINE & SYNCHRONIZED</span>
+                                </div>
+                                <div class="fiber-break-overlay" id="fiber-break-overlay" style="display:none;">
+                                    <div class="break-shield">⚡ OFFLINE BUFFER ACTIVE — AIR-GAPPED</div>
+                                </div>
+                            </div>
+
+                            <!-- Right Node: Cloud -->
+                            <div class="sync-node-card cloud-node">
+                                <div class="node-badge-top">CENTRAL CLUSTER</div>
+                                <div class="node-title">Cloud Qdrant (Cluster-01)</div>
+                                <div class="node-metrics">
+                                    <div class="node-metric-row">
+                                        <span>Status:</span>
+                                        <strong class="text-success" id="sync-cloud-status">ONLINE (gRPC 6334)</strong>
+                                    </div>
+                                    <div class="node-metric-row">
+                                        <span>Last Sync:</span>
+                                        <strong id="sync-last-time">Never</strong>
+                                    </div>
+                                    <div class="node-metric-row">
+                                        <span>Cloud State:</span>
+                                        <strong class="text-success">SYNCHRONIZED</strong>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -275,6 +332,49 @@
                         </div>
                         <div id="sync-priority-list" class="sim-lane-box" style="max-height: 200px; overflow-y: auto;">
                             <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Version Vector Conflict Resolver Visualizer -->
+                    <div class="card mt-4">
+                        <div class="card-header">
+                            <h3>🌳 Version Vector & Lamport Logical Clock Resolver Tree</h3>
+                            <span class="badge local">Deterministic Concurrency Control</span>
+                        </div>
+                        <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:1rem">
+                            When edge nodes mutate disconnected memories concurrently, CORTEX resolves split-brain conflicts using component-wise Version Vector partial ordering rather than drifting device wall-clocks.
+                        </p>
+                        <div class="conflict-tree-visualizer">
+                            <div class="tree-branch-box">
+                                <div class="tree-node edge-branch">
+                                    <span class="tree-node-tag">LOCAL MUTATION</span>
+                                    <div class="tree-node-title">Edge Node-01</div>
+                                    <div class="tree-node-vv">VV: {"edge-001": 3, "cloud": 1}</div>
+                                    <div class="tree-node-text">"Zone A valve inspection updated locally"</div>
+                                </div>
+                                <div class="tree-connector-line"></div>
+                            </div>
+                            <div class="tree-merge-center">
+                                <div class="tree-resolve-icon">⚡</div>
+                                <div class="tree-resolve-badge">LAMPORT CLOCK MERGE</div>
+                                <div class="tree-resolve-rule">Component-wise Max: max(VV_local, VV_cloud) + 1</div>
+                            </div>
+                            <div class="tree-branch-box">
+                                <div class="tree-node cloud-branch">
+                                    <span class="tree-node-tag">REMOTE MUTATION</span>
+                                    <div class="tree-node-title">Cloud Server Replica</div>
+                                    <div class="tree-node-vv">VV: {"edge-001": 1, "cloud": 2}</div>
+                                    <div class="tree-node-text">"Zone A valve maintenance performed remotely"</div>
+                                </div>
+                                <div class="tree-connector-line"></div>
+                            </div>
+                        </div>
+                        <div class="tree-converged-box mt-3">
+                            <div class="tree-converged-header">
+                                <span class="badge synced">✅ CONVERGED CANONICAL MEMORY</span>
+                                <span style="font-family:var(--font-mono); font-size:0.75rem; color:var(--signal-teal)">VV: {"edge-001": 4, "cloud": 2} &bull; Clock: 4</span>
+                            </div>
+                            <div style="font-weight:600; color:var(--navy-primary); margin-top:4px">"Zone A valve inspection updated locally" &bull; Tags: [zone-a, valve, maintenance, remote]</div>
                         </div>
                     </div>
 
@@ -319,6 +419,7 @@
                         <div class="sim-toolbar-right">
                             <button id="btn-sim-toggle" class="btn primary" style="background:var(--signal-teal);color:#FFFFFF;border:none;font-weight:600">▶ Start Mission</button>
                             <button id="btn-sim-inject-anomaly" class="btn anomaly">⚡ Inject Hazard (Anomaly)</button>
+                            <button id="btn-sim-heatmap" class="btn" style="background:#4A5568;color:#FFF;border:none">🔥 Toggle Heatmap</button>
                             <button id="btn-sim-spawn-routine" class="btn">📦 Spawn Cargo</button>
                             <button id="btn-sim-consolidate" class="btn" style="background:#F5A623;color:#FFF;border:none">🧬 Consolidate</button>
                             <button id="btn-sim-reset" class="btn">🔄 Reset Arena</button>
@@ -408,7 +509,7 @@
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
 
-    <script src="/static/app.js?v=2.6"></script>
-    <script src="/static/simulation.js?v=2.6"></script>
+    <script src="/static/app.js?v=2.7"></script>
+    <script src="/static/simulation.js?v=2.7"></script>
 </body>
 </html>

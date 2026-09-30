@@ -489,19 +489,77 @@ document.getElementById('btn-run-sleep').addEventListener('click', async () => {
 
 
 // ═══════════════════════════════════════════════════════════════════════
-//  SYNC PANEL VIEW
+//  SYNC PANEL VIEW & FIBER-OPTIC BRIDGE
 // ═══════════════════════════════════════════════════════════════════════
+function emitSyncPacket(type = 'batch', text = '') {
+    const layer = document.getElementById('fiber-packets-layer');
+    if (!layer) return;
+    const packet = document.createElement('div');
+    packet.className = `fiber-packet ${type}`;
+    packet.innerHTML = type === 'anomaly'
+        ? `⚡ Fast-Path: ${text || 'Novel Anomaly'}`
+        : `📦 Vector Batch: ${text || '384-d embed'}`;
+
+    const offsetY = (Math.random() - 0.5) * 20;
+    packet.style.top = `calc(50% + ${offsetY}px)`;
+
+    layer.appendChild(packet);
+    setTimeout(() => {
+        if (packet.parentNode) packet.remove();
+    }, 2100);
+}
+
 async function refreshSyncPanel() {
     try {
         const status = await api('/api/sync/status');
-        document.getElementById('sync-pending-count').textContent = status.pending_count;
-        document.getElementById('sync-last-time').textContent = status.last_sync
-            ? timeAgo(status.last_sync.completed_at)
-            : 'Never';
+        const pendingEl = document.getElementById('sync-pending-count');
+        if (pendingEl) pendingEl.textContent = status.pending_count;
+        
+        const lastTimeEl = document.getElementById('sync-last-time');
+        if (lastTimeEl) {
+            lastTimeEl.textContent = status.last_sync
+                ? timeAgo(status.last_sync.completed_at)
+                : 'Never';
+        }
 
         const toggleBtn = document.getElementById('btn-toggle-connection');
-        toggleBtn.textContent = status.is_online ? 'Go Offline' : 'Go Online';
-        toggleBtn.className = status.is_online ? 'btn' : 'btn text-error';
+        if (toggleBtn) {
+            toggleBtn.textContent = status.is_online ? 'Go Offline' : 'Go Online';
+            toggleBtn.className = status.is_online ? 'btn' : 'btn text-error';
+        }
+
+        // Update Fiber Bridge Visual Elements
+        const breakOverlay = document.getElementById('fiber-break-overlay');
+        const fiberDot = document.getElementById('fiber-dot');
+        const fiberText = document.getElementById('fiber-status-text');
+        const edgeStatus = document.getElementById('sync-edge-status');
+        const cloudStatus = document.getElementById('sync-cloud-status');
+        const edgeVv = document.getElementById('sync-edge-vv');
+
+        if (status.is_online) {
+            if (breakOverlay) breakOverlay.style.display = 'none';
+            if (fiberDot) {
+                fiberDot.className = 'fiber-pulse-dot online';
+            }
+            if (fiberText) fiberText.textContent = '⚡ FIBER PIPELINE: ONLINE & SYNCHRONIZED';
+            if (cloudStatus) {
+                cloudStatus.textContent = 'ONLINE (gRPC 6334)';
+                cloudStatus.className = 'text-success';
+            }
+        } else {
+            if (breakOverlay) breakOverlay.style.display = 'flex';
+            if (fiberDot) {
+                fiberDot.className = 'fiber-pulse-dot offline';
+            }
+            if (fiberText) fiberText.textContent = '⚠️ FIBER PIPELINE: AIR-GAPPED (OFFLINE BUFFER ACTIVE)';
+            if (cloudStatus) {
+                cloudStatus.textContent = 'DISCONNECTED (Air-Gapped)';
+                cloudStatus.className = 'text-error';
+            }
+        }
+
+        if (edgeStatus) edgeStatus.textContent = 'ACTIVE (384-d)';
+        if (edgeVv) edgeVv.textContent = `{"node-01": ${Math.max(12, status.pending_count + 12)}, "cloud": 4}`;
 
         // Render Priority Fast-Path Queue & Unsynced Memories
         try {
@@ -535,24 +593,26 @@ async function refreshSyncPanel() {
         // Render sync history
         const history = await api('/api/sync/history');
         const logEl = document.getElementById('sync-log');
-        logEl.innerHTML = '';
+        if (logEl) {
+            logEl.innerHTML = '';
 
-        if (history.length === 0) {
-            logEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center">No sync events yet.</div>';
-            return;
+            if (history.length === 0) {
+                logEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center">No sync events yet.</div>';
+                return;
+            }
+
+            history.slice().reverse().forEach(s => {
+                const entry = document.createElement('div');
+                entry.className = 'log-entry';
+                entry.innerHTML = `
+                    <span class="log-time">${fmtDate(s.started_at)}</span>
+                    <span class="log-badge ${s.status}">${s.status}</span>
+                    <span>Pushed: ${s.records_pushed} | Pulled: ${s.records_pulled} | Conflicts: ${s.conflicts_resolved}</span>
+                    ${s.errors.length > 0 ? `<span class="text-error" style="margin-left:8px">${s.errors.join('; ')}</span>` : ''}
+                `;
+                logEl.appendChild(entry);
+            });
         }
-
-        history.slice().reverse().forEach(s => {
-            const entry = document.createElement('div');
-            entry.className = 'log-entry';
-            entry.innerHTML = `
-                <span class="log-time">${fmtDate(s.started_at)}</span>
-                <span class="log-badge ${s.status}">${s.status}</span>
-                <span>Pushed: ${s.records_pushed} | Pulled: ${s.records_pulled} | Conflicts: ${s.conflicts_resolved}</span>
-                ${s.errors.length > 0 ? `<span class="text-error" style="margin-left:8px">${s.errors.join('; ')}</span>` : ''}
-            `;
-            logEl.appendChild(entry);
-        });
     } catch (e) {
         console.warn('Sync panel refresh failed:', e);
     }
@@ -576,9 +636,15 @@ document.getElementById('btn-trigger-sync').addEventListener('click', async (e) 
     btn.disabled = true;
     btn.textContent = 'Syncing…';
 
+    // Fire continuous visual data packets across fiber pipe during sync
+    emitSyncPacket('batch', 'Payload Push (384-d)');
+    setTimeout(() => emitSyncPacket('batch', 'Payload Push (384-d)'), 300);
+    setTimeout(() => emitSyncPacket('batch', 'Delta Ingestion'), 600);
+
     try {
         const result = await api('/api/sync', { method: 'POST' });
-        document.getElementById('sync-last-time').textContent = 'Just now';
+        const lastEl = document.getElementById('sync-last-time');
+        if (lastEl) lastEl.textContent = 'Just now';
         refreshSyncPanel();
         refreshOverview();
         showToast(
@@ -737,6 +803,7 @@ async function handleAnomalyInject(btn) {
         showToast(res.message, 'warning');
 
         // If on Sync view, show active feedback alert card
+        emitSyncPacket('anomaly', res.memory ? res.memory.text.slice(0, 20) : 'Hazard');
         const alertBox = document.getElementById('sync-anomaly-alert-box');
         if (alertBox) {
             const simPct = res.nearest_similarity !== null && res.nearest_similarity !== undefined

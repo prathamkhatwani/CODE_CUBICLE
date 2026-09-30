@@ -129,6 +129,10 @@
     // ═══════════════════════════════════════════════════════════════════════
     let isRunning = false;
     let animFrameId = null;
+    let showHeatmap = false;
+
+    let exploredGrid = Array.from({ length: ROWS }, () => Array(COLS).fill(false));
+    let visitHeatmap = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
 
     let robot = {
         x: 1.5 * CELL_SIZE,
@@ -137,17 +141,19 @@
         cellR: 1,
         heading: 0,
         speed: 2.2,
+        battery: 100,
         cargo: [],
         maxCargo: 3,
         state: 'STANDBY', // 'STANDBY' | 'PATROLLING' | 'PICKING' | 'RETURNING' | 'DOCKING' | 'AVOIDING_HAZARD'
         path: [],
+        trail: [], // Breadcrumb exploration trail
         targetItem: null,
         radarAngle: 0,
         lockOnTarget: null // { x, y, alpha, color, text }
     };
 
     let items = [];
-    let pulses = []; // { x, y, radius, maxRadius, color, alpha }
+    let pulses = []; // { x, y, radius, maxRadius, color, alpha, isAnomaly, rings, rotation }
     let fastLane = []; // Priority Anomaly queue
     let batchLane = []; // Routine batch queue
     let simLogs = [];
@@ -478,13 +484,18 @@
             // Block cell for navigation
             dynamicObstacles.add(`${item.c},${item.r}`);
 
+            // 3-ring holographic radar shockwave explosion
             pulses.push({
                 x: item.x,
                 y: item.y,
-                radius: 12,
-                maxRadius: 90,
+                radius: 14,
+                maxRadius: 110,
                 color: '#E85D4A',
-                alpha: 1.0
+                alpha: 1.0,
+                isAnomaly: true,
+                rings: 3,
+                rotation: 0,
+                name: item.hazardInfo.name
             });
 
             fastLane.unshift({
@@ -548,8 +559,39 @@
         robot.cellR = Math.floor(robot.y / CELL_SIZE);
         robot.radarAngle = (robot.radarAngle + 0.06) % (Math.PI * 2);
 
-        // 1. Radar Scanning for Unseen Objects
+        // 1. Fog-of-War Exploration Pass & Heatmap Visit Tracking
         const scanDistPx = SCAN_RADIUS_CELLS * CELL_SIZE;
+        for (let r = 0; r < ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+                if (!exploredGrid[r][c]) {
+                    const cx = (c + 0.5) * CELL_SIZE;
+                    const cy = (r + 0.5) * CELL_SIZE;
+                    if (Math.hypot(cx - robot.x, cy - robot.y) <= scanDistPx + 12) {
+                        exploredGrid[r][c] = true;
+                    }
+                }
+            }
+        }
+
+        if (robot.cellR >= 0 && robot.cellR < ROWS && robot.cellC >= 0 && robot.cellC < COLS) {
+            visitHeatmap[robot.cellR][robot.cellC] = (visitHeatmap[robot.cellR][robot.cellC] || 0) + 1;
+        }
+
+        // Battery level simulation
+        if (robot.state === 'DOCKING') {
+            robot.battery = Math.min(100, (robot.battery || 100) + 0.6);
+        } else {
+            robot.battery = Math.max(12, (robot.battery || 100) - 0.012);
+        }
+
+        // Exploration breadcrumbs trail
+        robot.trail = robot.trail || [];
+        if (robot.trail.length === 0 || Math.hypot(robot.x - robot.trail[robot.trail.length - 1].x, robot.y - robot.trail[robot.trail.length - 1].y) > 14) {
+            robot.trail.push({ x: robot.x, y: robot.y, alpha: 0.6 });
+            if (robot.trail.length > 40) robot.trail.shift();
+        }
+
+        // 2. Radar Scanning for Unseen Objects
         items.forEach(item => {
             if (!item.detected && !item.picked && !item.recording) {
                 const dx = item.x - robot.x;
@@ -570,7 +612,7 @@
             }
         });
 
-        // 2. State Machine & Autonomous Patrol
+        // 3. State Machine & Autonomous Patrol
         if (robot.cargo.length >= robot.maxCargo && robot.state !== 'RETURNING' && robot.state !== 'DOCKING') {
             robot.state = 'RETURNING';
             robot.path = findPathBFS(robot.cellC, robot.cellR, 1, 1);
@@ -607,7 +649,7 @@
             }
         }
 
-        // 3. Movement Execution
+        // 4. Movement Execution
         if (robot.path && robot.path.length > 0) {
             const nextNode = robot.path[0];
             const dx = nextNode.x - robot.x;
@@ -650,7 +692,7 @@
             robot.state = 'PATROLLING';
         }
 
-        // 4. Batch Lane Flush Timer (every 8s)
+        // 5. Batch Lane Flush Timer (every 8s)
         batchFlushTimer++;
         if (batchFlushTimer >= 480) {
             batchFlushTimer = 0;
@@ -731,7 +773,38 @@
         ctx.fillText('ZONE B — HIGH-BAY AISLES 1-4', 240, H - 12);
         ctx.fillText('ZONE C — BULK STORAGE AISLES 5-8', 520, H - 12);
 
-        // 3. Draw Shelves & Dock Station
+        // 3. Aisle Traffic Heatmap Overlay (if toggled)
+        if (showHeatmap) {
+            let maxVisits = 1;
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    if (visitHeatmap[r][c] > maxVisits) maxVisits = visitHeatmap[r][c];
+                }
+            }
+
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    const count = visitHeatmap[r][c];
+                    if (count > 0 && grid[r][c] === 0) {
+                        const ratio = Math.min(1.0, count / maxVisits);
+                        const x = c * CELL_SIZE;
+                        const y = r * CELL_SIZE;
+                        ctx.save();
+                        if (ratio < 0.35) {
+                            ctx.fillStyle = `rgba(15, 184, 160, ${ratio * 0.75})`;
+                        } else if (ratio < 0.7) {
+                            ctx.fillStyle = `rgba(245, 166, 35, ${ratio * 0.8})`;
+                        } else {
+                            ctx.fillStyle = `rgba(232, 93, 74, ${ratio * 0.85})`;
+                        }
+                        ctx.fillRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+                        ctx.restore();
+                    }
+                }
+            }
+        }
+
+        // 4. Draw Shelves & Dock Station
         for (let r = 0; r < ROWS; r++) {
             for (let c = 0; c < COLS; c++) {
                 const cellType = grid[r][c];
@@ -756,12 +829,10 @@
                     ctx.lineWidth = 1.5;
                     ctx.strokeRect(x + 2, y + 2, CELL_SIZE - 4, CELL_SIZE - 4);
                     
-                    // Inner glowing cross/marker
                     ctx.strokeStyle = 'rgba(15, 184, 160, 0.35)';
                     ctx.lineWidth = 1;
                     ctx.strokeRect(x + 6, y + 6, CELL_SIZE - 12, CELL_SIZE - 12);
 
-                    // Perfectly Centered Label
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.font = '700 8.5px "Fira Code", monospace';
@@ -772,7 +843,32 @@
             }
         }
 
-        // 4. Draw Planned BFS Path
+        // 5. Exploration Trail Breadcrumbs
+        if (robot.trail && robot.trail.length > 1) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(15, 184, 160, 0.35)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([2, 4]);
+            ctx.beginPath();
+            ctx.moveTo(robot.trail[0].x, robot.trail[0].y);
+            for (let i = 1; i < robot.trail.length; i++) {
+                ctx.lineTo(robot.trail[i].x, robot.trail[i].y);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Breadcrumb dots
+            robot.trail.forEach((pt, idx) => {
+                const alpha = (idx / robot.trail.length) * 0.6;
+                ctx.fillStyle = `rgba(15, 184, 160, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.restore();
+        }
+
+        // 6. Draw Planned BFS Path
         if (robot.path && robot.path.length > 0) {
             ctx.beginPath();
             ctx.strokeStyle = 'rgba(15, 184, 160, 0.65)';
@@ -784,12 +880,11 @@
             ctx.setLineDash([]);
         }
 
-        // 5. Draw Items & Hazards
+        // 7. Draw Items & Hazards
         items.forEach(item => {
             if (item.picked) return;
 
             if (item.isHazard) {
-                // Hazard rendering
                 ctx.fillStyle = 'rgba(232, 93, 74, 0.3)';
                 ctx.beginPath();
                 ctx.arc(item.x, item.y, CELL_SIZE * 0.46, 0, Math.PI * 2);
@@ -813,7 +908,6 @@
                 ctx.fillStyle = '#FF7B69';
                 ctx.fillText('ANOMALY', item.x, item.y - 17);
             } else {
-                // Routine Cargo Box
                 const color = ROUTINE_CLUSTERS[item.type].color;
                 ctx.fillStyle = color;
                 ctx.beginPath();
@@ -833,25 +927,92 @@
             }
         });
 
-        // 6. Expanding Radar Waves & Anomaly Pulses
+        // 8. Dynamic "Fog-of-War" Shroud Pass for Unexplored Cells
+        ctx.save();
+        for (let r = 0; r < ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+                if (!exploredGrid[r][c]) {
+                    const x = c * CELL_SIZE;
+                    const y = r * CELL_SIZE;
+                    ctx.fillStyle = 'rgba(10, 15, 29, 0.65)';
+                    ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+                    
+                    // Subtle futuristic hatch dot
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+                    ctx.beginPath();
+                    ctx.arc(x + CELL_SIZE / 2, y + CELL_SIZE / 2, 1, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+        ctx.restore();
+
+        // 9. Expanding Radar Waves & 3-Ring Holographic Anomaly Shockwaves
         for (let i = pulses.length - 1; i >= 0; i--) {
             const p = pulses[i];
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-            ctx.strokeStyle = p.color;
-            ctx.globalAlpha = p.alpha;
-            ctx.lineWidth = 2.5;
-            ctx.stroke();
-            ctx.globalAlpha = 1.0;
+            ctx.save();
+            if (p.isAnomaly) {
+                // Multi-ring holographic shockwave explosion
+                p.rotation = (p.rotation || 0) + 0.04;
 
-            p.radius += 2.2;
-            p.alpha -= 0.025;
+                // Outer primary ring
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = '#E85D4A';
+                ctx.globalAlpha = p.alpha;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+
+                // Middle ring
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, Math.max(2, p.radius * 0.7), 0, Math.PI * 2);
+                ctx.strokeStyle = '#FF7B69';
+                ctx.globalAlpha = p.alpha * 0.8;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Inner ring
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, Math.max(1, p.radius * 0.4), 0, Math.PI * 2);
+                ctx.strokeStyle = '#F5A623';
+                ctx.globalAlpha = p.alpha * 0.9;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+
+                // Rotating Dashed Crosshairs
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.rotate(p.rotation);
+                ctx.strokeStyle = 'rgba(232, 93, 74, ' + (p.alpha * 0.7) + ')';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([4, 6]);
+                ctx.beginPath();
+                ctx.moveTo(-p.radius, 0); ctx.lineTo(p.radius, 0);
+                ctx.moveTo(0, -p.radius); ctx.lineTo(0, p.radius);
+                ctx.stroke();
+                ctx.restore();
+
+                p.radius += 2.6;
+                p.alpha -= 0.02;
+            } else {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = p.color;
+                ctx.globalAlpha = p.alpha;
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+
+                p.radius += 2.2;
+                p.alpha -= 0.025;
+            }
+            ctx.restore();
+
             if (p.alpha <= 0 || p.radius >= p.maxRadius) {
                 pulses.splice(i, 1);
             }
         }
 
-        // 7. Lock-On Laser Target Reticle
+        // 10. Lock-On Laser Target Reticle
         if (robot.lockOnTarget && robot.lockOnTarget.alpha > 0) {
             ctx.save();
             ctx.strokeStyle = robot.lockOnTarget.color;
@@ -878,7 +1039,7 @@
             if (robot.lockOnTarget.alpha <= 0) robot.lockOnTarget = null;
         }
 
-        // 8. Draw Robot & 3.5-Cell Radar Scanner
+        // 11. Draw Robot & 3.5-Cell Radar Scanner
         const scanDistPx = SCAN_RADIUS_CELLS * CELL_SIZE;
 
         ctx.save();
@@ -928,10 +1089,51 @@
             ctx.arc(cx, cy, 2, 0, Math.PI * 2);
             ctx.fill();
         }
+        ctx.restore();
+
+        // 12. Floating Robot Mini-HUD (Rendered directly above robot)
+        ctx.save();
+        const hudX = Math.max(70, Math.min(W - 70, robot.x));
+        const hudY = Math.max(30, robot.y - 32);
+
+        ctx.fillStyle = 'rgba(10, 15, 29, 0.92)';
+        ctx.beginPath();
+        ctx.roundRect(hudX - 60, hudY - 14, 120, 22, 6);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(15, 184, 160, 0.7)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Battery level icon + %
+        const batt = Math.round(robot.battery || 100);
+        const battColor = batt > 50 ? '#0FB8A0' : (batt > 25 ? '#F5A623' : '#E85D4A');
+        ctx.font = '700 8.5px "Fira Code", monospace';
+        ctx.fillStyle = battColor;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`⚡${batt}%`, hudX - 52, hudY - 3);
+
+        // Cargo slots representation [📦][📦][ ]
+        let cargoStr = '';
+        for (let i = 0; i < robot.maxCargo; i++) {
+            cargoStr += i < robot.cargo.length ? '📦' : '▫️';
+        }
+        ctx.font = '8px Inter, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(cargoStr, hudX + 52, hudY - 3);
+
+        // Target / state subtitle pill
+        ctx.font = '600 7.5px "Fira Code", monospace';
+        ctx.fillStyle = '#94A3B8';
+        ctx.textAlign = 'center';
+        const targetText = robot.targetItem
+            ? `TARGET: (${robot.targetItem.c},${robot.targetItem.r})`
+            : (robot.state === 'DOCKING' ? 'RECHARGING' : robot.state);
+        ctx.fillText(targetText, hudX, hudY + 5);
 
         ctx.restore();
 
-        // 9. On-Screen Status Banner overlay
+        // 13. On-Screen Status Banner overlay
         if (onScreenBanner && onScreenBanner.timer > 0) {
             ctx.save();
             const bannerY = 18;
@@ -940,7 +1142,7 @@
             const boxW = Math.max(340, textWidth + 36);
             const boxX = (W - boxW) / 2;
 
-            ctx.fillStyle = onScreenBanner.type === 'error' ? '#16213E' : (onScreenBanner.type === 'warning' ? '#16213E' : '#16213E');
+            ctx.fillStyle = '#16213E';
             ctx.fillRect(boxX, bannerY, boxW, 28);
             ctx.strokeStyle = onScreenBanner.type === 'error' ? '#E85D4A' : (onScreenBanner.type === 'warning' ? '#F5A623' : '#0FB8A0');
             ctx.lineWidth = 1.5;
@@ -1120,7 +1322,9 @@
         robot.cellC = 1;
         robot.cellR = 1;
         robot.heading = 0;
+        robot.battery = 100;
         robot.cargo = [];
+        robot.trail = [];
         robot.state = isRunning ? 'PATROLLING' : 'STANDBY';
         robot.path = [];
         robot.targetItem = null;
@@ -1128,8 +1332,19 @@
         lastVectorMatch = null;
         savedToQdrantCount = 0;
 
+        // Reset explored & heatmap matrices
+        exploredGrid = Array.from({ length: ROWS }, () => Array(COLS).fill(false));
+        visitHeatmap = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+
+        // Uncover initial dock region
+        for (let r = 0; r <= 3; r++) {
+            for (let c = 0; c <= 3; c++) {
+                exploredGrid[r][c] = true;
+            }
+        }
+
         spawnRoutineItems(6);
-        logSim('Arena & Vector Store reset to factory baseline.', 'info');
+        logSim('Arena, LiDAR telemetry & Vector Store reset to factory baseline.', 'info');
         renderLanes();
         updatePills();
     }
@@ -1175,6 +1390,15 @@
 
         const btnAnomaly = document.getElementById('btn-sim-inject-anomaly');
         if (btnAnomaly) btnAnomaly.addEventListener('click', injectAnomalyHazard);
+
+        const btnHeatmap = document.getElementById('btn-sim-heatmap');
+        if (btnHeatmap) {
+            btnHeatmap.addEventListener('click', () => {
+                showHeatmap = !showHeatmap;
+                btnHeatmap.style.background = showHeatmap ? '#E85D4A' : '#4A5568';
+                showSimToast(`Aisle Heatmap: ${showHeatmap ? 'ENABLED' : 'DISABLED'}`, 'info');
+            });
+        }
 
         const btnSpawn = document.getElementById('btn-sim-spawn-routine');
         if (btnSpawn) btnSpawn.addEventListener('click', () => spawnRoutineItems(4));
