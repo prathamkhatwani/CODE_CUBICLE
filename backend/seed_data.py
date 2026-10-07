@@ -161,6 +161,38 @@ SEED_GROUPS: list[dict] = [
             "Safety: zone C noise levels at 92 decibels, above OSHA 90 dB 8-hour limit, ongoing 15 minutes",
         ],
     },
+    # ── Hardware Diagnostics & Part Codes (Hybrid Search Benchmark targets) ──
+    {
+        "category": "maintenance",
+        "source": "can-bus-monitor",
+        "importance": 0.95,
+        "tags": ["error-code", "motor", "critical"],
+        "entries": [
+            "CRITICAL FAULT: Actuator motor 4 controller tripped with error code ERR-4021 during heavy payload transit",
+            "Diagnostic log: Motor controller #4 reported ERR-4021 thermal overload shutdown on auxiliary CAN bus",
+            "Hardware alert ERR-4021: Actuator motor 4 inverter failure in robot arm joint",
+        ],
+    },
+    {
+        "category": "sensor_readings",
+        "source": "bms-telemetry",
+        "importance": 0.9,
+        "tags": ["battery", "hardware", "serial-number"],
+        "entries": [
+            "Battery pack module SN-A3-7781 reported cell bank 2 voltage degradation below 3.1V threshold",
+            "BMS diagnostic: Hardware unit SN-A3-7781 cell resistance anomaly detected during fast charge cycle",
+        ],
+    },
+    {
+        "category": "maintenance",
+        "source": "lidar-diagnostics",
+        "importance": 0.85,
+        "tags": ["lidar", "calibration", "part-number"],
+        "entries": [
+            "Optical navigation lidar component PART-XYZ-990 calibration offset drifted by 1.8 degrees",
+            "Maintenance required for sensor assembly PART-XYZ-990: angular alignment check needed",
+        ],
+    },
 ]
 
 

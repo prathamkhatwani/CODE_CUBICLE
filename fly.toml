@@ -1,0 +1,28 @@
+# Fly.io deployment configuration for CORTEX Edge Memory Platform
+app = "cortex-edge-memory"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PYTHONUNBUFFERED = "1"
+  PORT = "8000"
+  EDGE_DEMO_MODE = "true"
+  EDGE_AUTH_ENABLED = "false"
+  EDGE_QDRANT_PATH = "/data/qdrant_edge_data"
+
+[mounts]
+  source = "cortex_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

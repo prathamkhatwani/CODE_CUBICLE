@@ -308,60 +308,93 @@ document.getElementById('btn-refresh-explorer').addEventListener('click', refres
 
 
 // ═══════════════════════════════════════════════════════════════════════
-//  SEARCH VIEW
+//  SEARCH VIEW (Dense / Sparse BM25 / Hybrid RRF)
 // ═══════════════════════════════════════════════════════════════════════
 let searchTimer = null;
-document.getElementById('search-input').addEventListener('input', (e) => {
-    clearTimeout(searchTimer);
-    const q = e.target.value.trim();
+let currentSearchMode = 'hybrid';
+
+// Search mode switcher
+document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentSearchMode = btn.dataset.mode;
+        executeSearch();
+    });
+});
+
+// Demo query chips
+document.querySelectorAll('.query-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+        const input = document.getElementById('search-input');
+        input.value = chip.dataset.query;
+        executeSearch();
+    });
+});
+
+async function executeSearch() {
+    const input = document.getElementById('search-input');
+    const q = input.value.trim();
     const container = document.getElementById('search-results');
 
     if (!q) {
-        container.innerHTML = '<div class="empty-state">Enter a query to search memories semantically</div>';
+        container.innerHTML = '<div class="empty-state">Enter a query or click a demo keyword above</div>';
         return;
     }
 
-    searchTimer = setTimeout(async () => {
-        try {
-            const res = await api('/api/search', { method: 'POST', body: JSON.stringify({ query: q, limit: 15 }) });
-            container.innerHTML = '';
+    container.innerHTML = '<div class="empty-state" style="color:var(--signal-teal)">Searching with Qdrant Edge [' + currentSearchMode.toUpperCase() + ']...</div>';
 
-            if (!res.results || res.results.length === 0) {
-                container.innerHTML = '<div class="empty-state">No matching memories found</div>';
-                return;
-            }
+    try {
+        const res = await api('/api/search', {
+            method: 'POST',
+            body: JSON.stringify({ query: q, limit: 15, mode: currentSearchMode })
+        });
+        container.innerHTML = '';
 
-            // Search header
-            const header = document.createElement('div');
-            header.className = 'search-info';
-            header.innerHTML = `Found <strong>${res.total_found}</strong> results in <strong>${res.search_time_ms.toFixed(1)}ms</strong>`;
-            container.appendChild(header);
-
-            res.results.forEach(r => {
-                const card = document.createElement('div');
-                card.className = 'search-card';
-                const scorePct = r.score ? (r.score * 100).toFixed(1) : '—';
-                card.innerHTML = `
-                    <div class="search-card-text">${r.text}</div>
-                    <div class="search-card-score">
-                        <div class="score-bar-bg"><div class="score-bar-fill" style="width:${r.score ? r.score * 100 : 0}%"></div></div>
-                        <span class="score-value">${scorePct}%</span>
-                    </div>
-                    <div class="search-meta">
-                        ${syncBadge(r)}
-                        <span>Source: <em>${r.source}</em></span>
-                        <span>Category: <em>${r.category}</em></span>
-                        ${r.tags && r.tags.length > 0 ? r.tags.map(t => `<span class="tag">${t}</span>`).join('') : ''}
-                        ${r.is_consolidated ? '<span class="badge consolidated">Consolidated</span>' : ''}
-                        ${r.pii_detected ? '<span class="badge local">PII</span>' : ''}
-                    </div>
-                `;
-                container.appendChild(card);
-            });
-        } catch (e) {
-            container.innerHTML = '<div class="empty-state" style="color:var(--accent-error)">Search failed — is the backend running?</div>';
+        if (!res.results || res.results.length === 0) {
+            container.innerHTML = `<div class="empty-state">No matching memories found for "${escapeHtml(q)}" in ${currentSearchMode.toUpperCase()} mode</div>`;
+            return;
         }
-    }, 300);
+
+        // Search info header with mode and latency
+        const header = document.createElement('div');
+        header.className = 'search-info';
+        const latencyVal = res.latency_ms !== undefined ? res.latency_ms : res.search_time_ms;
+        header.innerHTML = `
+            <span>Found <strong>${res.total_found}</strong> results via <strong>${(res.mode || currentSearchMode).toUpperCase()}</strong></span>
+            <span class="latency-badge">⚡ ${latencyVal.toFixed(2)} ms</span>
+        `;
+        container.appendChild(header);
+
+        res.results.forEach(r => {
+            const card = document.createElement('div');
+            card.className = 'search-card';
+            const scorePct = r.score ? (r.score * 100).toFixed(1) : '—';
+            card.innerHTML = `
+                <div class="search-card-text">${escapeHtml(r.text)}</div>
+                <div class="search-card-score">
+                    <div class="score-bar-bg"><div class="score-bar-fill" style="width:${r.score ? Math.min(r.score * 100, 100) : 0}%"></div></div>
+                    <span class="score-value">Score: ${r.score !== null && r.score !== undefined ? r.score.toFixed(4) : '—'}</span>
+                </div>
+                <div class="search-meta">
+                    ${syncBadge(r)}
+                    <span>Source: <em>${escapeHtml(r.source)}</em></span>
+                    <span>Category: <em>${escapeHtml(r.category)}</em></span>
+                    ${r.tags && r.tags.length > 0 ? r.tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('') : ''}
+                    ${r.is_consolidated ? '<span class="badge consolidated">Consolidated</span>' : ''}
+                    ${r.pii_detected ? '<span class="badge local">PII</span>' : ''}
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    } catch (e) {
+        container.innerHTML = '<div class="empty-state" style="color:var(--coral-accent)">Search failed — verify backend is active.</div>';
+    }
+}
+
+document.getElementById('search-input').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(executeSearch, 300);
 });
 
 
@@ -660,6 +693,47 @@ document.getElementById('btn-trigger-sync').addEventListener('click', async (e) 
         btn.textContent = 'Trigger Sync';
     }
 });
+
+const pullFleetBtn = document.getElementById('btn-pull-fleet');
+if (pullFleetBtn) {
+    pullFleetBtn.addEventListener('click', async () => {
+        pullFleetBtn.disabled = true;
+        pullFleetBtn.textContent = 'Pulling…';
+        emitSyncPacket('batch', 'Fleet Knowledge Pull');
+        try {
+            const res = await api('/api/fleet/pull', { method: 'POST' });
+            refreshSyncPanel();
+            refreshOverview();
+            showToast(`Pulled ${res.records_pulled} records from Central Fleet Knowledge Base`, 'success');
+        } catch (err) {
+            showToast('Fleet pull failed: ' + err.message, 'error');
+        } finally {
+            pullFleetBtn.disabled = false;
+            pullFleetBtn.textContent = '📥 Pull Fleet';
+        }
+    });
+}
+
+const conflictBtn = document.getElementById('btn-run-conflict-demo');
+if (conflictBtn) {
+    conflictBtn.addEventListener('click', async () => {
+        conflictBtn.disabled = true;
+        conflictBtn.textContent = 'Resolving…';
+        emitSyncPacket('batch', 'Conflict Check');
+        setTimeout(() => emitSyncPacket('anomaly', 'Split-Brain Concurrency'), 200);
+        try {
+            const res = await api('/api/demo/conflict', { method: 'POST' });
+            refreshSyncPanel();
+            refreshActivity();
+            showToast(`Conflict Resolved: ${res.resolution_strategy}`, 'success');
+        } catch (err) {
+            showToast('Conflict demo failed: ' + err.message, 'error');
+        } finally {
+            conflictBtn.disabled = false;
+            conflictBtn.textContent = '⚔️ Conflict Demo';
+        }
+    });
+}
 
 
 // ═══════════════════════════════════════════════════════════════════════

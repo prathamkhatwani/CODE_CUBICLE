@@ -1,6 +1,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
 qdrant-client==1.12.1
+qdrant-edge-py>=0.8.0
 fastembed==0.4.1
 numpy==1.26.4
 scikit-learn==1.5.2

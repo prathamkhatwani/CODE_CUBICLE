@@ -59,11 +59,38 @@ class Settings:
         r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b',   # IP address
     ])
 
+    PORT: int = 8000
+    DATA_DIR: str | None = None
+
     def __post_init__(self):
-        """Override from environment variables."""
-        for attr_name in vars(self):
-            env_key = f"EDGE_{attr_name}"
-            env_val = os.environ.get(env_key)
+        """Override from environment variables with or without EDGE_ prefix."""
+        # Mapping of aliases
+        aliases = {
+            "DATA_DIR": "EDGE_QDRANT_PATH",
+            "EDGE_DATA_DIR": "EDGE_QDRANT_PATH",
+            "CLOUD_URL": "CLOUD_QDRANT_URL",
+            "EDGE_CLOUD_URL": "CLOUD_QDRANT_URL",
+            "CLOUD_API_KEY": "CLOUD_QDRANT_API_KEY",
+            "EDGE_CLOUD_API_KEY": "CLOUD_QDRANT_API_KEY",
+        }
+
+        for attr_name in list(vars(self)):
+            # Check direct name, EDGE_ prefix, and aliases
+            candidates = [
+                f"EDGE_{attr_name}",
+                attr_name,
+            ]
+            for alias_key, target in aliases.items():
+                if target == attr_name or alias_key == attr_name:
+                    candidates.extend([alias_key, f"EDGE_{alias_key}"])
+
+            env_val = None
+            for c in candidates:
+                val = os.environ.get(c)
+                if val is not None:
+                    env_val = val
+                    break
+
             if env_val is not None:
                 current = getattr(self, attr_name)
                 if isinstance(current, bool):
@@ -74,6 +101,9 @@ class Settings:
                     setattr(self, attr_name, int(env_val))
                 else:
                     setattr(self, attr_name, env_val)
+
+        if self.DATA_DIR and not os.environ.get("EDGE_QDRANT_PATH"):
+            self.EDGE_QDRANT_PATH = self.DATA_DIR
 
 
 settings = Settings()

@@ -148,6 +148,10 @@ class ConsolidationEngine:
                 if tagged:
                     result.records_tagged_local += 1
 
+            # 6. Optimize edge index storage
+            if hasattr(self.store, "optimize"):
+                self.store.optimize()
+
             # Finalise
             result.memories_after = self.store.count_active()
             result.completed_at = datetime.now(timezone.utc).isoformat()

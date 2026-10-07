@@ -1,6 +1,6 @@
 """
 Comprehensive End-to-End Verification Test for Edge Memory & Intelligence Platform.
-Tests every phase of the problem statement:
+Tests every core capability of the problem statement:
 - Local offline embedding & search
 - Memory consolidation ("sleep cycle" - clustering, merging, decay, PII tagging)
 - Cleaned semantic search after sleep cycle
@@ -181,7 +181,7 @@ def run_tests():
     assert anomaly_res["memory"]["priority"] == "high"
     assert anomaly_res["memory"]["priority_reason"] == "anomaly"
 
-    print(f"\n{'='*70}\n[SUCCESS] ALL SYSTEM PHASES & FEATURES (INCLUDING ANOMALY PRIORITY SYNC) VERIFIED PERFECTLY!\n{'='*70}")
+    print(f"\n{'='*70}\n[SUCCESS] ALL SYSTEM MODULES & FEATURES (INCLUDING ANOMALY PRIORITY SYNC) VERIFIED PERFECTLY!\n{'='*70}")
 
 if __name__ == "__main__":
     run_tests()

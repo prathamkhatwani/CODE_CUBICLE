@@ -4,11 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CORTEX | Edge Memory Platform</title>
-    <link rel="stylesheet" href="/static/styles.css?v=2.7">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/chart.umd.min.js"></script>
 </head>
 <body>
     <div class="app-container">
@@ -200,12 +197,29 @@
 
                 <!-- Search View -->
                 <div class="view" id="view-search">
-                    <div class="search-header">
-                        <input type="text" id="search-input" placeholder="Search memories via semantic similarity..." class="large-search">
+                    <div class="search-header card">
+                        <div class="search-input-row">
+                            <input type="text" id="search-input" placeholder="Search memories via Hybrid (Dense + BM25) or toggle modes..." class="large-search">
+                        </div>
+                        <div class="search-controls-row">
+                            <div class="search-mode-toggles">
+                                <span class="control-label">Search Mode:</span>
+                                <button class="mode-btn active" data-mode="hybrid">⚡ Hybrid (RRF)</button>
+                                <button class="mode-btn" data-mode="dense">🧠 Dense Vector</button>
+                                <button class="mode-btn" data-mode="sparse">🔍 Sparse BM25</button>
+                            </div>
+                            <div class="search-quick-queries">
+                                <span class="control-label">Demo Queries:</span>
+                                <button class="query-chip" data-query="ERR-4021">Error "ERR-4021"</button>
+                                <button class="query-chip" data-query="SN-A3-7781">Serial "SN-A3-7781"</button>
+                                <button class="query-chip" data-query="PART-XYZ-990">Part "PART-XYZ-990"</button>
+                                <button class="query-chip" data-query="motor temperature overheating">"motor overheating"</button>
+                            </div>
+                        </div>
                     </div>
                     <div class="search-results" id="search-results">
                         <!-- Populated by JS -->
-                        <div class="empty-state">Enter a query to search memories</div>
+                        <div class="empty-state">Enter a query or click a demo keyword above</div>
                     </div>
                 </div>
 
@@ -255,9 +269,11 @@
                                 <h3>⚡ Real-Time Fiber-Optic Sync Highway</h3>
                                 <p style="color:var(--text-muted); font-size:0.8rem; margin-top:2px">Live bidirectional vector bridge between edge Qdrant and central cloud server with sub-millisecond anomaly fast-track.</p>
                             </div>
-                            <div style="display:flex; align-items:center; gap:0.6rem;">
+                            <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap: wrap;">
                                 <button id="btn-toggle-connection" class="btn">Go Offline</button>
                                 <button id="btn-trigger-sync" class="btn primary">Trigger Sync</button>
+                                <button id="btn-pull-fleet" class="btn">📥 Pull Fleet</button>
+                                <button id="btn-run-conflict-demo" class="btn">⚔️ Conflict Demo</button>
                                 <button id="btn-inject-anomaly-sync" class="btn anomaly">⚡ Simulate Anomaly</button>
                             </div>
                         </div>

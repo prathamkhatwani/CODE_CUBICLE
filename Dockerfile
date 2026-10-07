@@ -1,5 +1,5 @@
-# Multi-stage Dockerfile for CORTEX Edge Memory Platform
-FROM python:3.11-slim
+# Multi-stage Dockerfile for CORTEX Edge Memory Platform (linux/amd64 for Qdrant Edge wheels)
+FROM --platform=linux/amd64 python:3.11-slim
 
 WORKDIR /app
 
@@ -20,7 +20,8 @@ COPY frontend/ ./frontend/
 # Set working directory to backend
 WORKDIR /app/backend
 
-# Pre-download FastEmbed model into cache to ensure offline readiness
+# Pre-download FastEmbed model into cache during build for 100% offline runtime operation
+ENV HF_HUB_DISABLE_SYMLINKS_WARNING=1
 RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='BAAI/bge-small-en-v1.5')"
 
 EXPOSE 8000

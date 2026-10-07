@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from activity_log import activity_log
 from config import settings
 from consolidation import ConsolidationEngine
+from embedding import embedding_service
 from models import (
     ActivityType,
     DashboardStats,
@@ -31,7 +33,7 @@ from models import (
     SearchRequest,
     SearchResponse,
 )
-from qdrant_store import QdrantStore
+from qdrant_store import PointRecord, QdrantStore
 from seed_data import generate_seed_data
 from sync_agent import SyncAgent
 
@@ -101,6 +103,10 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down Edge Memory Platform.")
+    if edge_store is not None:
+        edge_store.close()
+    if cloud_store is not None:
+        cloud_store.close()
 
 
 # ── App ──────────────────────────────────────────────────────────────────────
@@ -153,6 +159,22 @@ async def serve_app_js():
     js = FRONTEND_DIR / "app.js"
     if js.exists():
         return FileResponse(str(js), media_type="application/javascript", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    return HTMLResponse("", status_code=404)
+
+
+@app.get("/chart.umd.min.js")
+async def serve_chart_js():
+    cjs = FRONTEND_DIR / "chart.umd.min.js"
+    if cjs.exists():
+        return FileResponse(str(cjs), media_type="application/javascript", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    return HTMLResponse("", status_code=404)
+
+
+@app.get("/simulation.js")
+async def serve_simulation_js():
+    sjs = FRONTEND_DIR / "simulation.js"
+    if sjs.exists():
+        return FileResponse(str(sjs), media_type="application/javascript", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     return HTMLResponse("", status_code=404)
 
 
@@ -278,7 +300,9 @@ async def inject_anomaly_demo():
         tags=["anomaly", "critical", "priority-sync"],
         category="incident_reports",
         check_for_anomaly=True,
+        payload_overrides={"priority": "high", "priority_reason": "anomaly"},
     )
+    is_anomaly = True
 
     sim_str = f"{nearest_sim:.2f}" if nearest_sim is not None else "0.00"
     activity_log.log(
@@ -343,14 +367,15 @@ async def search_memories(req: SearchRequest):
         min_importance=req.min_importance,
         include_local_only=req.include_local_only,
         include_tombstones=req.include_tombstones,
+        mode=req.mode,
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     activity_log.log(
         ActivityType.SEARCH_PERFORMED,
-        "Search performed",
-        f"Query: '{req.query}' → {len(results)} results in {elapsed_ms:.1f}ms",
-        {"query": req.query, "results": len(results), "time_ms": elapsed_ms},
+        f"Search performed ({req.mode.upper()})",
+        f"Query: '{req.query}' [{req.mode}] → {len(results)} results in {elapsed_ms:.1f}ms",
+        {"query": req.query, "mode": req.mode, "results": len(results), "time_ms": elapsed_ms},
     )
 
     return SearchResponse(
@@ -358,6 +383,8 @@ async def search_memories(req: SearchRequest):
         results=results,
         total_found=len(results),
         search_time_ms=round(elapsed_ms, 2),
+        latency_ms=round(elapsed_ms, 2),
+        mode=req.mode,
     )
 
 
@@ -383,18 +410,127 @@ async def run_sync(_: bool = Depends(verify_auth)):
     return result
 
 
+@app.post("/api/fleet/pull")
+async def pull_fleet_knowledge(query: str | None = None, limit: int = 10, _: bool = Depends(verify_auth)):
+    """Pull relevant fleet knowledge from cloud with origin='cloud' tagging."""
+    pulled = sync_agent.pull_fleet_knowledge(query=query, limit=limit)
+    return {"status": "success", "records_pulled": pulled, "origin": "cloud"}
+
+
+@app.post("/api/demo/conflict")
+async def run_conflict_demo():
+    """
+    Scripted multi-device conflict resolution demonstration:
+    Simulates concurrent edits to the same memory on edge-001 and edge-002 while offline,
+    then resolves them via Version Vectors and Lamport Logical Clocks.
+    """
+    conflict_id = str(uuid.uuid4())
+    base_text = "Valve pressure calibration in sector 4 recorded at 45 PSI"
+
+    # 1. Base memory on Edge 1 (Device A)
+    pid, _, _ = edge_store.add_memory(
+        text=base_text,
+        source="edge-sensor-01",
+        importance=0.7,
+        tags=["valve", "pressure", "sector-4"],
+        category="maintenance",
+        point_id=conflict_id,
+        check_for_anomaly=False,
+        lamport_clock=1,
+        version_vector={"edge-001": 1},
+    )
+
+    # 2. Simulate Local Offline Edit on Device A (edge-001)
+    local_updated_payload = {
+        "text": "Valve pressure in sector 4 verified stable at 46.2 PSI [Local Maintenance Check]",
+        "source": "technician-alpha",
+        "importance": 0.85,
+        "tags": ["valve", "pressure", "sector-4", "local-verified"],
+        "category": "maintenance",
+        "device_id": "edge-001",
+        "source_device": "edge-001",
+        "synced": False,
+        "is_tombstone": False,
+        "state": "active",
+        "lamport_clock": 2,
+        "version_vector": {"edge-001": 2},
+    }
+    edge_store.upsert_point(conflict_id, embedding_service.embed_text(local_updated_payload["text"]), local_updated_payload)
+    local_pt = edge_store.get_point(conflict_id)
+
+    # 3. Simulate Remote Concurrent Edit on Device B (edge-002) in Cloud
+    remote_updated_payload = {
+        "text": "CRITICAL: Valve pressure in sector 4 fluctuating at 48.5 PSI [Remote Telemetry Alarm]",
+        "source": "remote-edge-002",
+        "importance": 0.95,
+        "tags": ["valve", "pressure", "sector-4", "telemetry-alert"],
+        "category": "incident_reports",
+        "device_id": "edge-002",
+        "source_device": "edge-002",
+        "synced": True,
+        "is_tombstone": False,
+        "state": "active",
+        "lamport_clock": 2,
+        "version_vector": {"edge-002": 2},
+    }
+    remote_pt = PointRecord(conflict_id, embedding_service.embed_text(remote_updated_payload["text"]), remote_updated_payload)
+
+    # 4. Resolve using Version Vectors
+    resolved_payload, resolution_info = sync_agent._resolve_version_vector_conflict(local_pt, remote_pt)
+    
+    # 5. Apply vector centroid averaging
+    avg_vec = embedding_service.average_vectors([
+        list(local_pt.vector),
+        list(remote_pt.vector),
+    ])
+    edge_store.upsert_point(conflict_id, avg_vec, resolved_payload)
+
+    activity_log.log(
+        ActivityType.CONFLICT_RESOLVED,
+        "⚡ Multi-Device Conflict Resolved",
+        f"Concurrent edits on {conflict_id[:8]} between edge-001 & edge-002 resolved. Winner: {resolved_payload.get('source')} (importance {resolved_payload.get('importance')}). Vector averaged.",
+        {
+            "conflict_id": conflict_id,
+            "local_version_vector": local_updated_payload["version_vector"],
+            "remote_version_vector": remote_updated_payload["version_vector"],
+            "merged_version_vector": resolved_payload["version_vector"],
+            "resolution": resolution_info,
+            "final_clock": resolved_payload["lamport_clock"],
+        },
+    )
+
+    return {
+        "status": "conflict_resolved",
+        "record_id": conflict_id,
+        "local_edit": local_updated_payload,
+        "remote_edit": remote_updated_payload,
+        "resolved_record": resolved_payload,
+        "resolution_strategy": resolution_info,
+        "explanation": "Concurrent edits detected with disjoint version vectors {'edge-001': 2} vs {'edge-002': 2}. Merged tags, combined version vector to {'edge-001': 2, 'edge-002': 2, '" + settings.DEVICE_ID + "': 3}, selected dominant payload based on importance & severity, and computed vector centroid average."
+    }
+
+
 @app.get("/api/sync/status")
 async def sync_status():
+    queue_info = sync_agent.get_queue_status()
     return {
         "is_online": sync_agent.is_online,
         "pending_count": sync_agent.get_pending_count(),
         "synced_count": sync_agent.get_synced_count(),
+        "queue_length": queue_info["queue_length"],
+        "anomalies_queued": queue_info["anomalies_queued"],
         "last_sync": (
             sync_agent.history[-1].model_dump()
             if sync_agent.history
             else None
         ),
     }
+
+
+@app.get("/api/sync/queue")
+async def get_sync_queue():
+    """Get offline queue inspection data and queued items."""
+    return sync_agent.get_queue_status()
 
 
 @app.get("/api/sync/history")

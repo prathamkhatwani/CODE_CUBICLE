@@ -85,3 +85,37 @@ def test_priority_fast_path_anomaly_push(store, sync_agent_fixture):
     cloud_pt = sync_agent_fixture.cloud.get_point(pid)
     assert cloud_pt is not None
     assert cloud_pt.payload["sync_path"] == "priority_fast_path"
+
+
+def test_cloud_origin_records_never_pushed_back(store, sync_agent_fixture):
+    """Test that records pulled from cloud (origin='cloud') are never re-pushed."""
+    cloud_rec_id = "mem-cloud-pulled-1"
+    store.upsert_point(
+        cloud_rec_id,
+        [0.1] * 384,
+        {
+            "text": "Fleet advisory from central server",
+            "origin": "cloud",
+            "synced": False,
+            "sync_eligibility": "sync_eligible",
+            "is_tombstone": False,
+            "state": "active",
+        }
+    )
+
+    from models import SyncResult
+    res = SyncResult(started_at="2026-01-01T00:00:00Z")
+    pushed = sync_agent_fixture._push_to_cloud(res)
+    assert pushed == 0
+
+
+def test_conflict_demo_endpoint_execution(client):
+    """Test the POST /api/demo/conflict endpoint."""
+    res = client.post("/api/demo/conflict")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "conflict_resolved"
+    assert "resolved_record" in data
+    assert "version_vector" in data["resolved_record"]
+    assert "edge-001" in data["resolved_record"]["version_vector"]
+    assert "edge-002" in data["resolved_record"]["version_vector"]

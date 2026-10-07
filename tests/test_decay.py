@@ -19,24 +19,14 @@ def test_decay_calculation_and_importance_weighting(store, engine):
     id_high = str(uuid.uuid4())
 
     # Low importance memory (importance = 0.1)
-    p_low = SimpleNamespace(
-        id=id_low,
-        payload={"text": "Routine noise", "importance": 0.1, "decay_score": 1.0, "created_at": old_time}
-    )
-    store.client.upsert(
-        collection_name=settings.COLLECTION_NAME,
-        points=[SimpleNamespace(id=id_low, vector=[0.1] * 384, payload=p_low.payload)]
-    )
+    payload_low = {"text": "Routine noise", "importance": 0.1, "decay_score": 1.0, "created_at": old_time}
+    store.upsert_point(id_low, [0.1] * 384, payload_low)
+    p_low = store.get_point(id_low)
 
     # High importance memory (importance = 0.95)
-    p_high = SimpleNamespace(
-        id=id_high,
-        payload={"text": "Critical safety hazard", "importance": 0.95, "decay_score": 1.0, "created_at": old_time}
-    )
-    store.client.upsert(
-        collection_name=settings.COLLECTION_NAME,
-        points=[SimpleNamespace(id=id_high, vector=[0.1] * 384, payload=p_high.payload)]
-    )
+    payload_high = {"text": "Critical safety hazard", "importance": 0.95, "decay_score": 1.0, "created_at": old_time}
+    store.upsert_point(id_high, [0.1] * 384, payload_high)
+    p_high = store.get_point(id_high)
 
     detail_low = engine._apply_decay(p_low, "test-batch")
     detail_high = engine._apply_decay(p_high, "test-batch")
@@ -50,14 +40,9 @@ def test_soft_delete_tombstone_when_below_threshold(store, engine):
     ancient_time = (now - timedelta(hours=200)).isoformat()
     id_stale = str(uuid.uuid4())
 
-    p_stale = SimpleNamespace(
-        id=id_stale,
-        payload={"text": "Ephemeral hallway sighting", "importance": 0.1, "decay_score": 0.20, "created_at": ancient_time}
-    )
-    store.client.upsert(
-        collection_name=settings.COLLECTION_NAME,
-        points=[SimpleNamespace(id=id_stale, vector=[0.1] * 384, payload=p_stale.payload)]
-    )
+    payload_stale = {"text": "Ephemeral hallway sighting", "importance": 0.1, "decay_score": 0.20, "created_at": ancient_time}
+    store.upsert_point(id_stale, [0.1] * 384, payload_stale)
+    p_stale = store.get_point(id_stale)
 
     detail = engine._apply_decay(p_stale, "test-batch")
     assert detail.action == "tombstoned"
@@ -75,19 +60,17 @@ def test_restore_tombstone_within_undo_window(store, engine):
     undo_until = (now + timedelta(seconds=300)).isoformat()
     id_restore = str(uuid.uuid4())
 
-    store.client.upsert(
-        collection_name=settings.COLLECTION_NAME,
-        points=[SimpleNamespace(
-            id=id_restore,
-            vector=[0.1] * 384,
-            payload={
-                "text": "Accidentally decayed note",
-                "is_tombstone": True,
-                "tombstone_at": now.isoformat(),
-                "undo_until": undo_until,
-                "decay_score": 0.05,
-            }
-        )]
+    store.upsert_point(
+        id_restore,
+        [0.1] * 384,
+        {
+            "text": "Accidentally decayed note",
+            "is_tombstone": True,
+            "state": "tombstone",
+            "tombstone_at": now.isoformat(),
+            "undo_until": undo_until,
+            "decay_score": 0.05,
+        }
     )
 
     assert store.count_active() == 0

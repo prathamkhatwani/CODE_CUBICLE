@@ -87,6 +87,7 @@ class SearchRequest(BaseModel):
     min_importance: float | None = None
     include_local_only: bool = True
     include_tombstones: bool = False
+    mode: str = "hybrid"  # "dense" | "sparse" | "hybrid"
 
 
 class SearchResponse(BaseModel):
@@ -94,6 +95,8 @@ class SearchResponse(BaseModel):
     results: list[MemoryResponse]
     total_found: int
     search_time_ms: float
+    latency_ms: float
+    mode: str = "hybrid"
 
 
 class ConsolidationResult(BaseModel):

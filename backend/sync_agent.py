@@ -25,11 +25,14 @@ from config import settings
 from embedding import embedding_service
 from models import ActivityType, SyncEligibility, SyncResult
 
+import json
+from pathlib import Path
+
 logger = logging.getLogger(__name__)
 
 
 class SyncAgent:
-    """Manages edge-to-cloud and cloud-to-edge synchronisation."""
+    """Manages edge-to-cloud and cloud-to-edge synchronisation with disk-persisted offline queue."""
 
     def __init__(self, edge_store, cloud_store=None):
         self.edge = edge_store
@@ -37,11 +40,83 @@ class SyncAgent:
         self.is_online: bool = False
         self.history: list[SyncResult] = []
         self._simulated_offline: bool = False
+        self._queue_file = Path(settings.EDGE_QDRANT_PATH) / "offline_sync_queue.json"
+        self._ensure_queue_file()
+
+    def _ensure_queue_file(self) -> None:
+        """Ensure the offline queue file directory exists."""
+        try:
+            self._queue_file.parent.mkdir(parents=True, exist_ok=True)
+            if not self._queue_file.exists():
+                self._save_queue([])
+        except Exception:
+            pass
+
+    def _load_queue(self) -> list[dict[str, Any]]:
+        """Load queued record descriptors from disk."""
+        try:
+            if self._queue_file.exists():
+                with open(self._queue_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as exc:
+            logger.debug("Failed to read offline queue from disk: %s", exc)
+        return []
+
+    def _save_queue(self, queue: list[dict[str, Any]]) -> None:
+        """Persist offline queue descriptors to disk."""
+        try:
+            self._queue_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._queue_file, "w", encoding="utf-8") as f:
+                json.dump(queue, f, indent=2)
+        except Exception as exc:
+            logger.debug("Failed to save offline queue to disk: %s", exc)
+
+    def enqueue_offline_record(self, point_id: str, priority: str = "normal", reason: str | None = None) -> None:
+        """Enqueue an unsynced record to disk queue while offline."""
+        queue = self._load_queue()
+        # Avoid duplicates
+        if not any(item.get("id") == point_id for item in queue):
+            queue.append({
+                "id": point_id,
+                "priority": priority,
+                "reason": reason,
+                "enqueued_at": datetime.now(timezone.utc).isoformat(),
+            })
+            self._save_queue(queue)
+            logger.info("Enqueued record %s to disk offline queue (priority=%s)", point_id[:8], priority)
+
+    def get_queue_status(self) -> dict[str, Any]:
+        """Return offline queue metrics."""
+        disk_queue = self._load_queue()
+        all_pts = self.edge.get_all_points(with_vectors=False)
+        unsynced = [
+            p for p in all_pts
+            if not p.payload.get("is_tombstone", False)
+            and p.payload.get("sync_eligibility") == SyncEligibility.SYNC_ELIGIBLE.value
+            and not p.payload.get("synced", False)
+            and p.payload.get("origin") != "cloud"
+        ]
+        anomalies = [p for p in unsynced if p.payload.get("priority") == "high"]
+        return {
+            "queue_length": len(unsynced),
+            "anomalies_queued": len(anomalies),
+            "disk_journal_count": len(disk_queue),
+            "is_online": self.is_online,
+            "items": [
+                {
+                    "id": str(p.id),
+                    "text": p.payload.get("text", "")[:70],
+                    "priority": p.payload.get("priority", "normal"),
+                    "category": p.payload.get("category", "general"),
+                }
+                for p in unsynced[:20]
+            ],
+        }
 
     # ── Connectivity ─────────────────────────────────────────────────────
 
     def check_connectivity(self) -> bool:
-        """Ping cloud Qdrant. Returns True if reachable."""
+        """Ping cloud Qdrant. Returns True if reachable. Auto-flushes queue on reconnect."""
         if self._simulated_offline:
             self.is_online = False
             return False
@@ -51,15 +126,20 @@ class SyncAgent:
             return False
 
         try:
-            self.cloud.client.get_collections()
+            if self.cloud.client is not None:
+                self.cloud.client.get_collections()
+            elif self.cloud.shard is not None:
+                self.cloud.count()
             was_online = self.is_online
             self.is_online = True
             if not was_online:
                 activity_log.log(
                     ActivityType.CONNECTIVITY_CHANGED,
                     "Connectivity restored",
-                    f"Cloud Qdrant at {settings.CLOUD_QDRANT_URL} is reachable.",
+                    f"Cloud Qdrant at {settings.CLOUD_QDRANT_URL} is reachable. Flushing offline queue by priority.",
                 )
+                # Auto-flush offline queue upon reconnection
+                self.flush_offline_queue()
             return True
         except Exception:
             was_online = self.is_online
@@ -68,9 +148,68 @@ class SyncAgent:
                 activity_log.log(
                     ActivityType.CONNECTIVITY_CHANGED,
                     "Connectivity lost",
-                    f"Cloud Qdrant at {settings.CLOUD_QDRANT_URL} is unreachable.",
+                    f"Cloud Qdrant at {settings.CLOUD_QDRANT_URL} is unreachable. Entering air-gapped offline queue mode.",
                 )
             return False
+
+    def flush_offline_queue(self) -> int:
+        """Flush queued offline records to cloud in priority order (anomalies first)."""
+        if not self.is_online or self.cloud is None:
+            return 0
+
+        all_points = self.edge.get_all_points(with_vectors=True)
+        eligible = [
+            p for p in all_points
+            if not p.payload.get("is_tombstone", False)
+            and p.payload.get("sync_eligibility") == SyncEligibility.SYNC_ELIGIBLE.value
+            and not p.payload.get("synced", False)
+            and p.payload.get("origin") != "cloud"
+        ]
+        if not eligible:
+            self._save_queue([])
+            return 0
+
+        # Sort priority high (anomalies) first
+        eligible.sort(
+            key=lambda p: (
+                0 if p.payload.get("priority") == "high" else 1,
+                p.payload.get("created_at", ""),
+            )
+        )
+
+        try:
+            self.cloud.ensure_collection()
+            points_data = []
+            for p in eligible:
+                pl = dict(p.payload)
+                pl["source_device"] = settings.DEVICE_ID
+                pl["synced_at"] = datetime.now(timezone.utc).isoformat()
+                points_data.append((str(p.id), list(p.vector), pl))
+
+            self.cloud.upsert_points_batch(points_data)
+
+            for p in eligible:
+                self.edge.update_payload(
+                    str(p.id),
+                    {
+                        "synced": True,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+
+            anomalies_count = sum(1 for p in eligible if p.payload.get("priority") == "high")
+            self._save_queue([])
+
+            activity_log.log(
+                ActivityType.SYNC_COMPLETED,
+                "Offline Queue Flushed",
+                f"Flushed {len(eligible)} offline records ({anomalies_count} high-priority anomalies dispatched first).",
+                {"total_flushed": len(eligible), "anomalies_flushed": anomalies_count},
+            )
+            return len(eligible)
+        except Exception as exc:
+            logger.warning("Failed to flush offline queue: %s", exc)
+            return 0
 
     def toggle_simulated_connectivity(self) -> bool:
         """For demo: toggle simulated offline/online."""
@@ -280,6 +419,7 @@ class SyncAgent:
             if not p.payload.get("is_tombstone", False)
             and p.payload.get("sync_eligibility") == SyncEligibility.SYNC_ELIGIBLE.value
             and not p.payload.get("synced", False)
+            and p.payload.get("origin") != "cloud"
         ]
 
         if not eligible:
@@ -354,8 +494,11 @@ class SyncAgent:
             local = self.edge.get_point(cp_id)
 
             if local is None:
-                # New record from another device — insert locally
-                self.edge.upsert_point(cp_id, list(cp.vector), dict(cp.payload))
+                # New record from another device — insert locally with origin="cloud"
+                cp_payload = dict(cp.payload)
+                cp_payload["origin"] = "cloud"
+                cp_payload["synced"] = True
+                self.edge.upsert_point(cp_id, list(cp.vector), cp_payload)
                 pulled += 1
             else:
                 # Same record exists both locally and in cloud — check Version Vectors
@@ -388,6 +531,44 @@ class SyncAgent:
                     )
 
         return pulled, conflicts
+
+    def pull_fleet_knowledge(self, query: str | None = None, limit: int = 10) -> int:
+        """
+        Pull relevant fleet knowledge from cloud Qdrant using recent context query.
+        Cached locally with origin='cloud' and marked synced=True so it is never re-pushed.
+        """
+        if not self.check_connectivity() or not self.cloud:
+            return 0
+
+        if not query:
+            recent_local = self.edge.get_all_points(with_vectors=False)
+            if recent_local:
+                recent_local.sort(key=lambda p: p.payload.get("created_at", ""), reverse=True)
+                query = recent_local[0].payload.get("text", "warehouse maintenance incident")
+            else:
+                query = "warehouse equipment safety diagnostics"
+
+        cloud_hits = self.cloud.search(query=query, limit=limit)
+        pulled = 0
+        for hit in cloud_hits:
+            hit_id = str(hit.id)
+            local_existing = self.edge.get_point(hit_id)
+            if local_existing is None:
+                pl = hit.model_dump()
+                pl["origin"] = "cloud"
+                pl["synced"] = True
+                d_vec = embedding_service.embed_text(hit.text)
+                self.edge.upsert_point(hit_id, d_vec, pl)
+                pulled += 1
+
+        if pulled > 0:
+            activity_log.log(
+                ActivityType.SYNC_COMPLETED,
+                "Fleet knowledge pulled",
+                f"Pulled {pulled} relevant fleet records from central cloud knowledge base (query: '{query[:40]}…'). Cached with origin='cloud'.",
+                {"pulled_count": pulled, "query": query},
+            )
+        return pulled
 
     # ── Conflict Resolution: Version Vectors & Lamport Clocks ────────────
 

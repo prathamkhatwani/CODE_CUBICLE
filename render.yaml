@@ -5,21 +5,25 @@ services:
   - type: web
     name: cortex-edge-memory-platform
     runtime: docker
-    plan: free
+    plan: starter # Starter plan recommended (512MB RAM minimum for ONNX embedding model + scikit-learn)
     region: oregon
     branch: main
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/status
     autoDeploy: true
+    disk:
+      name: cortex-edge-data
+      mountPath: /app/backend/qdrant_edge_data
+      sizeGB: 1
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: EDGE_DEMO_MODE
         value: "true"
-      - key: EDGE_EDGE_QDRANT_PATH
-        value: "./qdrant_edge_data"
+      - key: EDGE_QDRANT_PATH
+        value: "/app/backend/qdrant_edge_data"
       - key: EDGE_AUTH_ENABLED
         value: "false"
       - key: EDGE_DEVICE_NAME
-        value: "Render Cloud Edge Node"
+        value: "Render Hosted Edge Node"

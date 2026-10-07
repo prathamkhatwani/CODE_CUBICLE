@@ -1,7 +1,8 @@
 services:
-  # Central Cloud Qdrant Instance
+  # Central Cloud Qdrant Server
   cloud-qdrant:
     image: qdrant/qdrant:v1.12.1
+    platform: linux/amd64
     container_name: cortex-cloud-qdrant
     ports:
       - "6333:6333" # HTTP REST API
@@ -17,21 +18,49 @@ services:
       timeout: 5s
       retries: 5
 
-  # CORTEX Edge Memory Node Application
-  edge-platform:
+  # Edge Node 001 (Device Alpha on port 8000)
+  edge-001:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: cortex-edge-node
+    platform: linux/amd64
+    container_name: cortex-edge-001
     ports:
       - "8000:8000"
     environment:
-      - EDGE_CLOUD_QDRANT_URL=http://cloud-qdrant:6334
-      - EDGE_DEVICE_ID=edge-docker-01
-      - EDGE_DEVICE_NAME=Edge Node Container
-      - EDGE_DEMO_MODE=true
+      - DEVICE_ID=edge-001
+      - DEVICE_NAME=Edge Node 001 (Alpha)
+      - PORT=8000
+      - CLOUD_URL=http://cloud-qdrant:6334
+      - DATA_DIR=/app/backend/qdrant_edge_data
+      - DEMO_MODE=true
+      - AUTH_ENABLED=false
     volumes:
-      - edge_storage:/app/backend/qdrant_edge_data
+      - edge_001_storage:/app/backend/qdrant_edge_data
+    depends_on:
+      cloud-qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Edge Node 002 (Device Beta on port 8001)
+  edge-002:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    container_name: cortex-edge-002
+    ports:
+      - "8001:8000"
+    environment:
+      - DEVICE_ID=edge-002
+      - DEVICE_NAME=Edge Node 002 (Beta)
+      - PORT=8000
+      - CLOUD_URL=http://cloud-qdrant:6334
+      - DATA_DIR=/app/backend/qdrant_edge_data
+      - DEMO_MODE=true
+      - AUTH_ENABLED=false
+    volumes:
+      - edge_002_storage:/app/backend/qdrant_edge_data
     depends_on:
       cloud-qdrant:
         condition: service_healthy
@@ -39,4 +68,5 @@ services:
 
 volumes:
   qdrant_cloud_storage:
-  edge_storage:
+  edge_001_storage:
+  edge_002_storage:
