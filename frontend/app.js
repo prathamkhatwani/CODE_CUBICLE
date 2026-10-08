@@ -169,102 +169,121 @@ async function refreshOverview() {
 }
 
 function updateCharts(stats) {
+    if (typeof Chart === 'undefined') {
+        console.warn('Chart.js not loaded');
+        return;
+    }
+
     // ── Memory Timeline Chart ──
     const ctxMem = document.getElementById('memory-chart');
-    const timeline = stats.memory_timeline || [];
-
-    if (!memoryChart) {
-        Chart.defaults.color = '#4A5568';
-        Chart.defaults.font.family = "'Inter', -apple-system, sans-serif";
-
+    if (ctxMem) {
+        const timeline = stats.memory_timeline || [];
         const labels = timeline.length > 0
             ? timeline.map((t, i) => `Cycle ${i + 1}`)
             : ['Current'];
         const beforeData = timeline.length > 0
             ? timeline.map(t => t.before)
-            : [stats.total_memories];
+            : [stats.total_memories || 0];
         const afterData = timeline.length > 0
             ? timeline.map(t => t.after)
-            : [stats.total_memories];
+            : [stats.total_memories || 0];
 
-        memoryChart = new Chart(ctxMem, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'Before Consolidation',
-                        data: beforeData,
-                        borderColor: '#F5A623',
-                        backgroundColor: 'rgba(245, 166, 35, 0.08)',
-                        tension: 0.35,
-                        fill: true,
-                        pointRadius: 5,
-                        pointBackgroundColor: '#F5A623',
-                        borderWidth: 2.5,
-                    },
-                    {
-                        label: 'After Consolidation',
-                        data: afterData,
-                        borderColor: '#0FB8A0',
-                        backgroundColor: 'rgba(15, 184, 160, 0.08)',
-                        tension: 0.35,
-                        fill: true,
-                        pointRadius: 5,
-                        pointBackgroundColor: '#0FB8A0',
-                        borderWidth: 2.5,
-                    },
-                ],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    x: { grid: { color: 'rgba(226, 232, 240, 0.7)' }, ticks: { color: '#718096' } },
-                    y: { grid: { color: 'rgba(226, 232, 240, 0.7)' }, beginAtZero: true, ticks: { color: '#718096' } },
+        if (!memoryChart) {
+            Chart.defaults.color = '#4A5568';
+            Chart.defaults.font.family = "'Inter', -apple-system, sans-serif";
+
+            memoryChart = new Chart(ctxMem, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Before Consolidation',
+                            data: beforeData,
+                            borderColor: '#F5A623',
+                            backgroundColor: 'rgba(245, 166, 35, 0.08)',
+                            tension: 0.35,
+                            fill: true,
+                            pointRadius: 5,
+                            pointBackgroundColor: '#F5A623',
+                            borderWidth: 2.5,
+                        },
+                        {
+                            label: 'After Consolidation',
+                            data: afterData,
+                            borderColor: '#0FB8A0',
+                            backgroundColor: 'rgba(15, 184, 160, 0.08)',
+                            tension: 0.35,
+                            fill: true,
+                            pointRadius: 5,
+                            pointBackgroundColor: '#0FB8A0',
+                            borderWidth: 2.5,
+                        },
+                    ],
                 },
-                plugins: {
-                    legend: { labels: { boxWidth: 12, padding: 16, color: '#16213E', font: { weight: '600' } } },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { grid: { color: 'rgba(226, 232, 240, 0.7)' }, ticks: { color: '#718096' } },
+                        y: { grid: { color: 'rgba(226, 232, 240, 0.7)' }, beginAtZero: true, ticks: { color: '#718096', precision: 0 } },
+                    },
+                    plugins: {
+                        legend: { labels: { boxWidth: 12, padding: 16, color: '#16213E', font: { weight: '600' } } },
+                    },
                 },
-            },
-        });
-    } else {
-        // Update existing chart
-        const labels = timeline.length > 0
-            ? timeline.map((_, i) => `Cycle ${i + 1}`)
-            : ['Current'];
-        memoryChart.data.labels = labels;
-        memoryChart.data.datasets[0].data = timeline.length > 0 ? timeline.map(t => t.before) : [stats.total_memories];
-        memoryChart.data.datasets[1].data = timeline.length > 0 ? timeline.map(t => t.after) : [stats.total_memories];
-        memoryChart.update();
+            });
+        } else {
+            memoryChart.data.labels = labels;
+            memoryChart.data.datasets[0].data = beforeData;
+            memoryChart.data.datasets[1].data = afterData;
+            memoryChart.update();
+        }
     }
 
     // ── Category Doughnut ──
     const ctxCat = document.getElementById('category-chart');
-    const cats = stats.categories || {};
-    const catLabels = Object.keys(cats);
-    const catData = Object.values(cats);
-    const catColors = ['#16213E', '#0FB8A0', '#F5A623', '#E85D4A', '#4A5568', '#718096'];
+    if (ctxCat) {
+        const cats = stats.categories || {};
+        const catLabels = Object.keys(cats);
+        const catData = Object.values(cats);
+        const catColors = ['#16213E', '#0FB8A0', '#F5A623', '#E85D4A', '#4A5568', '#718096', '#805AD5', '#3182CE'];
 
-    if (!categoryChart) {
-        categoryChart = new Chart(ctxCat, {
-            type: 'doughnut',
-            data: {
-                labels: catLabels,
-                datasets: [{ data: catData, backgroundColor: catColors.slice(0, catLabels.length), borderWidth: 2, borderColor: '#FFFFFF' }],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                cutout: '70%',
-                plugins: { legend: { position: 'right', labels: { boxWidth: 10, padding: 10, color: '#4A5568', font: { size: 12 } } } },
-            },
-        });
-    } else {
-        categoryChart.data.labels = catLabels;
-        categoryChart.data.datasets[0].data = catData;
-        categoryChart.data.datasets[0].backgroundColor = catColors.slice(0, catLabels.length);
-        categoryChart.update();
+        const hasData = catLabels.length > 0 && catData.some(v => v > 0);
+        const displayLabels = hasData ? catLabels : ['No Data Yet'];
+        const displayData = hasData ? catData : [1];
+        const displayColors = hasData ? catColors.slice(0, catLabels.length) : ['#E2E8F0'];
+
+        if (!categoryChart) {
+            categoryChart = new Chart(ctxCat, {
+                type: 'doughnut',
+                data: {
+                    labels: displayLabels,
+                    datasets: [{
+                        data: displayData,
+                        backgroundColor: displayColors,
+                        borderWidth: 2,
+                        borderColor: '#FFFFFF'
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { boxWidth: 10, padding: 10, color: '#4A5568', font: { size: 12 } }
+                        }
+                    },
+                },
+            });
+        } else {
+            categoryChart.data.labels = displayLabels;
+            categoryChart.data.datasets[0].data = displayData;
+            categoryChart.data.datasets[0].backgroundColor = displayColors;
+            categoryChart.update();
+        }
     }
 }
 
