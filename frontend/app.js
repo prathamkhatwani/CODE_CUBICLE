@@ -16,7 +16,7 @@ let currentView = 'overview';
 // ═══════════════════════════════════════════════════════════════════════
 //  UTILITIES
 // ═══════════════════════════════════════════════════════════════════════
-const API = 'http://localhost:8000';
+const API = '';
 
 async function api(endpoint, opts = {}) {
     const res = await fetch(`${API}${endpoint}`, {

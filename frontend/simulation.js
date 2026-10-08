@@ -166,7 +166,7 @@
     // ═══════════════════════════════════════════════════════════════════════
     //  API HELPER (Direct to Backend)
     // ═══════════════════════════════════════════════════════════════════════
-    const API_BASE = 'http://localhost:8000';
+    const API_BASE = '';
 
     async function callBackend(endpoint, opts = {}) {
         try {
