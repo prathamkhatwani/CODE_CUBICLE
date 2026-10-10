@@ -20,11 +20,11 @@
     const SCAN_RADIUS_CELLS = 3.5;
     const ANOMALY_THRESHOLD = 0.70;
 
-    // Grid states: 0 = Empty floor, 1 = Shelf (permanent obstacle), 2 = Dock
+    // Grid states: 0 = Empty floor, 1 = Shelf (permanent obstacle), 2 = Dock Alpha, 3 = Dock Bravo
     const initialGrid = [
         [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-        [0,2,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,0],
-        [0,2,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,0],
+        [0,2,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,3,0],
+        [0,2,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,3,0],
         [0,0,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,0],
         [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
         [0,0,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,0],
@@ -134,23 +134,61 @@
     let exploredGrid = Array.from({ length: ROWS }, () => Array(COLS).fill(false));
     let visitHeatmap = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
 
-    let robot = {
-        x: 1.5 * CELL_SIZE,
-        y: 1.5 * CELL_SIZE,
-        cellC: 1,
-        cellR: 1,
-        heading: 0,
-        speed: 2.2,
-        battery: 100,
-        cargo: [],
-        maxCargo: 3,
-        state: 'STANDBY', // 'STANDBY' | 'PATROLLING' | 'PICKING' | 'RETURNING' | 'DOCKING' | 'AVOIDING_HAZARD'
-        path: [],
-        trail: [], // Breadcrumb exploration trail
-        targetItem: null,
-        radarAngle: 0,
-        lockOnTarget: null // { x, y, alpha, color, text }
-    };
+    let robots = [
+        {
+            id: 'edge-001',
+            name: 'Alpha',
+            badge: 'Alpha [edge-001]',
+            color: '#0FB8A0', // Teal
+            zoneMinC: 1,
+            zoneMaxC: 10,
+            dockC: 1,
+            dockR: 1,
+            x: 1.5 * CELL_SIZE,
+            y: 1.5 * CELL_SIZE,
+            cellC: 1,
+            cellR: 1,
+            heading: 0,
+            speed: 2.2,
+            battery: 100,
+            cargo: [],
+            maxCargo: 3,
+            state: 'STANDBY', // 'STANDBY' | 'PATROLLING' | 'PICKING' | 'RETURNING' | 'DOCKING' | 'AVOIDING_HAZARD'
+            path: [],
+            trail: [],
+            targetItem: null,
+            radarAngle: 0,
+            lockOnTarget: null
+        },
+        {
+            id: 'edge-002',
+            name: 'Bravo',
+            badge: 'Bravo [edge-002]',
+            color: '#F5A623', // Amber
+            zoneMinC: 11,
+            zoneMaxC: 20,
+            dockC: 20,
+            dockR: 1,
+            x: 20.5 * CELL_SIZE,
+            y: 1.5 * CELL_SIZE,
+            cellC: 20,
+            cellR: 1,
+            heading: Math.PI,
+            speed: 2.2,
+            battery: 100,
+            cargo: [],
+            maxCargo: 3,
+            state: 'STANDBY',
+            path: [],
+            trail: [],
+            targetItem: null,
+            radarAngle: Math.PI,
+            lockOnTarget: null
+        }
+    ];
+
+    let robotAlpha = robots[0];
+    let robotBravo = robots[1];
 
     let items = [];
     let pulses = []; // { x, y, radius, maxRadius, color, alpha, isAnomaly, rings, rotation }
@@ -186,7 +224,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    //  PATHFINDING: BFS
+    //  PATHFINDING: BFS (Multi-Robot Aware)
     // ═══════════════════════════════════════════════════════════════════════
     function isWalkable(c, r) {
         if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return false;
@@ -241,13 +279,26 @@
         return path;
     }
 
-    function findLocalPatrolPath() {
+    function findLocalPatrolPath(bot) {
         const candidates = [];
+        const minC = bot.zoneMinC || 1;
+        const maxC = bot.zoneMaxC || (COLS - 2);
+
         for (let r = 1; r < ROWS - 1; r++) {
-            for (let c = 1; c < COLS - 1; c++) {
+            for (let c = minC; c <= maxC; c++) {
                 if (grid[r][c] === 0 && !dynamicObstacles.has(`${c},${r}`)) {
-                    const dist = Math.abs(c - robot.cellC) + Math.abs(r - robot.cellR);
-                    if (dist >= 2 && dist <= 14) {
+                    const dist = Math.abs(c - bot.cellC) + Math.abs(r - bot.cellR);
+                    if (dist >= 2 && dist <= 12) {
+                        candidates.push({ c, r });
+                    }
+                }
+            }
+        }
+        // Fallback to full grid if zone is constrained
+        if (candidates.length === 0) {
+            for (let r = 1; r < ROWS - 1; r++) {
+                for (let c = 1; c < COLS - 1; c++) {
+                    if (grid[r][c] === 0 && !dynamicObstacles.has(`${c},${r}`)) {
                         candidates.push({ c, r });
                     }
                 }
@@ -255,43 +306,45 @@
         }
         candidates.sort(() => Math.random() - 0.5);
         for (const cand of candidates) {
-            const p = findPathBFS(robot.cellC, robot.cellR, cand.c, cand.r);
+            const p = findPathBFS(bot.cellC, bot.cellR, cand.c, cand.r);
             if (p && p.length > 0) {
-                robot.path = p;
+                bot.path = p;
                 return p;
             }
         }
         return null;
     }
 
-    function replanPathAroundHazards() {
-        if (robot.targetItem && !dynamicObstacles.has(`${robot.targetItem.c},${robot.targetItem.r}`)) {
-            const p = findPathBFS(robot.cellC, robot.cellR, robot.targetItem.c, robot.targetItem.r);
+    function replanPathAroundHazards(bot) {
+        if (!bot) return;
+
+        if (bot.targetItem && !dynamicObstacles.has(`${bot.targetItem.c},${bot.targetItem.r}`)) {
+            const p = findPathBFS(bot.cellC, bot.cellR, bot.targetItem.c, bot.targetItem.r);
             if (p && p.length > 0) {
-                robot.path = p;
+                bot.path = p;
                 return;
             }
         }
 
         // If target item is unreachable or is a hazard, reset it
-        robot.targetItem = null;
+        bot.targetItem = null;
 
-        if (robot.state === 'RETURNING') {
-            const dockPath = findPathBFS(robot.cellC, robot.cellR, 1, 1);
+        if (bot.state === 'RETURNING') {
+            const dockPath = findPathBFS(bot.cellC, bot.cellR, bot.dockC, bot.dockR);
             if (dockPath && dockPath.length > 0) {
-                robot.path = dockPath;
+                bot.path = dockPath;
             } else {
-                findLocalPatrolPath();
+                findLocalPatrolPath(bot);
             }
             return;
         }
 
-        // Search for an unblocked routine item
+        // Search for an unblocked routine item in or near bot's zone
         const available = items.filter(it => !it.isHazard && !it.picked && !dynamicObstacles.has(`${it.c},${it.r}`));
         let bestPath = null;
         let chosenItem = null;
         for (const it of available) {
-            const p = findPathBFS(robot.cellC, robot.cellR, it.c, it.r);
+            const p = findPathBFS(bot.cellC, bot.cellR, it.c, it.r);
             if (p && p.length > 0 && (!bestPath || p.length < bestPath.length)) {
                 bestPath = p;
                 chosenItem = it;
@@ -299,17 +352,17 @@
         }
 
         if (bestPath && chosenItem) {
-            robot.targetItem = chosenItem;
-            robot.path = bestPath;
-            robot.state = 'PICKING';
+            bot.targetItem = chosenItem;
+            bot.path = bestPath;
+            bot.state = 'PICKING';
         } else {
-            // Patrol towards safe area or local patrol loop if dock is blocked
-            robot.state = 'PATROLLING';
-            const dockPath = findPathBFS(robot.cellC, robot.cellR, 1, 1);
+            // Patrol towards safe area or local patrol loop
+            bot.state = 'PATROLLING';
+            const dockPath = findPathBFS(bot.cellC, bot.cellR, bot.dockC, bot.dockR);
             if (dockPath && dockPath.length > 0) {
-                robot.path = dockPath;
+                bot.path = dockPath;
             } else {
-                findLocalPatrolPath();
+                findLocalPatrolPath(bot);
             }
         }
     }
@@ -336,17 +389,17 @@
     }
 
     function updatePills() {
-        const elState = document.getElementById('sim-stat-state');
-        const elCargo = document.getElementById('sim-stat-cargo');
+        const elStateAlpha = document.getElementById('sim-stat-state-alpha');
+        const elStateBravo = document.getElementById('sim-stat-state-bravo');
         const elSaved = document.getElementById('sim-stat-saved-count');
         const elFast = document.getElementById('sim-stat-fast-count');
-        const elBatch = document.getElementById('sim-stat-batch-count');
+        const elFleetSync = document.getElementById('sim-stat-fleet-sync');
 
-        if (elState) elState.textContent = robot.state;
-        if (elCargo) elCargo.textContent = `${robot.cargo.length} / ${robot.maxCargo}`;
+        if (elStateAlpha) elStateAlpha.textContent = `${robotAlpha.state} (${robotAlpha.cargo.length}/${robotAlpha.maxCargo})`;
+        if (elStateBravo) elStateBravo.textContent = `${robotBravo.state} (${robotBravo.cargo.length}/${robotBravo.maxCargo})`;
         if (elSaved) elSaved.textContent = savedToQdrantCount;
         if (elFast) elFast.textContent = fastLane.length;
-        if (elBatch) elBatch.textContent = batchLane.length;
+        if (elFleetSync) elFleetSync.textContent = 'CONNECTED';
     }
 
     function setCanvasBanner(text, type = 'info', duration = 300) {
@@ -396,36 +449,36 @@
     function injectAnomalyHazard() {
         const hazardMeta = HAZARD_TYPES[Math.floor(Math.random() * HAZARD_TYPES.length)];
         
-        // Find best spawn location: 1-2 cells ahead of robot if possible
+        // Find best spawn location: in front of Robot Alpha (edge-001) in left zone
         let targetC = null, targetR = null;
 
-        // Try placing ahead along path
-        if (robot.path && robot.path.length > 1) {
-            const step = robot.path[Math.min(2, robot.path.length - 1)];
+        // Try placing ahead along Alpha's path
+        if (robotAlpha.path && robotAlpha.path.length > 1) {
+            const step = robotAlpha.path[Math.min(2, robotAlpha.path.length - 1)];
             if (grid[step.r][step.c] === 0 && !dynamicObstacles.has(`${step.c},${step.r}`)) {
                 targetC = step.c;
                 targetR = step.r;
             }
         }
 
-        // Try adjacent forward cell based on heading
+        // Try adjacent forward cell based on Alpha's heading
         if (targetC === null) {
-            const forwardC = Math.round(robot.cellC + Math.cos(robot.heading) * 2);
-            const forwardR = Math.round(robot.cellR + Math.sin(robot.heading) * 2);
+            const forwardC = Math.round(robotAlpha.cellC + Math.cos(robotAlpha.heading) * 2);
+            const forwardR = Math.round(robotAlpha.cellR + Math.sin(robotAlpha.heading) * 2);
             if (forwardC >= 0 && forwardC < COLS && forwardR >= 0 && forwardR < ROWS && grid[forwardR][forwardC] === 0 && !dynamicObstacles.has(`${forwardC},${forwardR}`)) {
                 targetC = forwardC;
                 targetR = forwardR;
             }
         }
 
-        // Fallback: any nearby open cell
+        // Fallback: open cell in Alpha's left patrol zone (cols 2-8)
         if (targetC === null) {
             let attempts = 0;
             while (attempts < 50) {
                 attempts++;
-                const c = Math.floor(Math.random() * (COLS - 6)) + 4;
+                const c = Math.floor(Math.random() * 7) + 2;
                 const r = Math.floor(Math.random() * (ROWS - 4)) + 2;
-                if (grid[r][c] === 0 && !dynamicObstacles.has(`${c},${r}`) && (c !== robot.cellC || r !== robot.cellR)) {
+                if (grid[r][c] === 0 && !dynamicObstacles.has(`${c},${r}`) && (c !== robotAlpha.cellC || r !== robotAlpha.cellR)) {
                     targetC = c;
                     targetR = r;
                     break;
@@ -450,61 +503,62 @@
                 category: hazardMeta.category,
                 importance: hazardMeta.importance,
                 isHazard: true,
-                detected: true, // Immediate capture
+                detected: true, // Immediate capture by Alpha
                 recording: false,
                 picked: false
             };
             items.push(hazardItem);
 
-            // Replan path around hazard IMMEDIATELY and synchronously
-            replanPathAroundHazards();
+            // Replan Alpha's path around hazard IMMEDIATELY and synchronously
+            replanPathAroundHazards(robotAlpha);
 
-            // Auto-start simulation if stopped so user sees dynamic interaction immediately
+            // Auto-start simulation if stopped so user sees dynamic fleet interaction immediately
             if (!isRunning) {
                 isRunning = true;
                 const btn = document.getElementById('btn-sim-toggle');
                 if (btn) {
-                    btn.textContent = '⏸ Pause Mission';
+                    btn.textContent = '⏸ Pause Fleet Mission';
                     btn.style.background = '#E85D4A';
                 }
             }
 
-            // LiDAR Lock-On Aim
-            robot.heading = Math.atan2(hazardItem.y - robot.y, hazardItem.x - robot.x);
-            robot.lockOnTarget = {
+            // Robot Alpha LiDAR Lock-On Aim
+            robotAlpha.heading = Math.atan2(hazardItem.y - robotAlpha.y, hazardItem.x - robotAlpha.x);
+            robotAlpha.lockOnTarget = {
                 x: hazardItem.x,
                 y: hazardItem.y,
                 alpha: 1.0,
                 color: '#E85D4A',
-                text: hazardMeta.name
+                text: `${hazardMeta.name} [ALPHA 001]`
             };
 
-            logSim(`⚡ [RADAR LOCK-ON] Detected ${hazardMeta.name} at (${targetC}, ${targetR}) — Triggering Qdrant Embedding!`, 'warning');
-            showSimToast(`🚨 Hazard Detected: ${hazardMeta.name}`, 'error');
-            setCanvasBanner(`🚨 NOVEL HAZARD DETECTED: ${hazardMeta.name} — SAVING TO QDRANT EDGE...`, 'error', 240);
+            logSim(`⚡ [ALPHA RADAR LOCK-ON] Detected ${hazardMeta.name} at (${targetC}, ${targetR}) — Triggering Qdrant Edge Embedding!`, 'warning');
+            showSimToast(`🚨 Alpha (edge-001) Detected: ${hazardMeta.name}`, 'error');
+            setCanvasBanner(`🚨 NOVEL HAZARD IN ALPHA'S AISLE: ${hazardMeta.name} — SAVING TO QDRANT EDGE...`, 'error', 240);
 
             // Record to Qdrant backend immediately
-            recordMemoryToQdrant(hazardItem);
+            recordMemoryToQdrant(hazardItem, robotAlpha);
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    //  REAL DETECTION & QDRANT RECORDING ENGINE
+    //  REAL DETECTION & QDRANT RECORDING ENGINE (MULTI-ROBOT & FLEET SYNC)
     // ═══════════════════════════════════════════════════════════════════════
-    async function recordMemoryToQdrant(item) {
+    async function recordMemoryToQdrant(item, detectingBot = robotAlpha) {
         if (item.recording) return;
         item.recording = true;
         
         const payload = {
             text: item.text,
-            source: 'robot-lidar-radar',
+            source: detectingBot ? `robot-${detectingBot.id}-lidar` : 'robot-lidar-radar',
             importance: item.importance,
             category: item.category,
-            tags: item.isHazard ? ['hazard', 'lidar-radar', 'anomaly', 'fast-path'] : ['cargo', 'lidar-radar', 'warehouse-patrol'],
+            tags: item.isHazard ? ['hazard', 'lidar-radar', 'anomaly', 'fast-path', 'fleet-broadcast'] : ['cargo', 'lidar-radar', 'warehouse-patrol'],
             metadata: {
                 grid_c: item.c,
                 grid_r: item.r,
                 type: item.type,
+                detector_device: detectingBot ? detectingBot.id : 'edge-001',
                 timestamp_epoch: Date.now()
             }
         };
@@ -578,16 +632,14 @@
             });
 
             fastLane.unshift({
-                name: item.hazardInfo.name,
+                name: `${item.hazardInfo.name} (${detectingBot.name})`,
                 sim: nearestSim,
                 id: memId.slice(0, 8),
                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
             });
             if (fastLane.length > 5) fastLane.pop();
 
-            logSim(`🚨 [QDRANT EDGE] Anomaly Saved: ${item.hazardInfo.name} (Sim: ${(nearestSim * 100).toFixed(0)}% < 70%) → CLOUD FAST-PATH PUSHED!`, 'error');
-            showSimToast(`⚡ Fast Lane Sync: ${item.hazardInfo.name} (${(nearestSim * 100).toFixed(0)}%)`, 'error');
-            setCanvasBanner(`⚡ ANOMALY CAPTURED & SAVED (Sim: ${(nearestSim * 100).toFixed(0)}% < 70%) → REROUTING BFS!`, 'error', 260);
+            logSim(`🚨 [QDRANT EDGE] Anomaly Saved by ${detectingBot.name}: ${item.hazardInfo.name} (Sim: ${(nearestSim * 100).toFixed(0)}% < 70%) → CLOUD FAST-PATH PUSHED!`, 'error');
 
             storedScatterMemories.push({
                 type: item.type,
@@ -595,16 +647,39 @@
                 text: item.text
             });
 
-            // Immediately recalculate BFS path around the hazard
-            if (robot.targetItem) {
-                robot.path = findPathBFS(robot.cellC, robot.cellR, robot.targetItem.c, robot.targetItem.r) || [];
-            } else if (robot.state === 'RETURNING') {
-                robot.path = findPathBFS(robot.cellC, robot.cellR, 1, 1) || [];
-            } else {
-                // Find alternative waypoint
-                robot.state = 'PATROLLING';
-                robot.path = findPathBFS(robot.cellC, robot.cellR, 1, 1) || [];
-            }
+            // ═══════════════════════════════════════════════════════════════
+            // 🌟 AHA! MOMENT: FLEET BROADCAST VIA CLOUD SYNC BRIDGE
+            // ═══════════════════════════════════════════════════════════════
+            // Robot Alpha saved to Qdrant Edge -> pushed via Fast-Path to Cloud Qdrant.
+            // Cloud sync broadcasts the hazard obstacle to the entire fleet (Robot Bravo edge-002).
+            // Robot Bravo recalculates its route to avoid the hazard BEFORE entering that aisle!
+            const otherBot = detectingBot.id === 'edge-001' ? robotBravo : robotAlpha;
+            
+            // Replan for detecting bot
+            replanPathAroundHazards(detectingBot);
+
+            // Trigger fleet broadcast to other bot
+            setTimeout(() => {
+                logSim(`📡 [FLEET CLOUD SYNC] ${otherBot.name} (${otherBot.id}) received hazard telemetry from ${detectingBot.name} — Rerouting route before entering corridor!`, 'warning');
+                showSimToast(`📡 Fleet Broadcast: ${otherBot.name} rerouting around hazard!`, 'info');
+                setCanvasBanner(`📡 FLEET BROADCAST: ${detectingBot.name} &rarr; Cloud &rarr; ${otherBot.name} — Rerouting path!`, 'warning', 320);
+
+                // Give other bot a visual notification pulse
+                pulses.push({
+                    x: otherBot.x,
+                    y: otherBot.y,
+                    radius: 10,
+                    maxRadius: 75,
+                    color: otherBot.color,
+                    alpha: 0.9,
+                    isAnomaly: false,
+                    rings: 1,
+                    rotation: 0
+                });
+
+                // Force other bot to replan path immediately
+                replanPathAroundHazards(otherBot);
+            }, 300);
             logSim(`⚡ Dynamic BFS rerouted robot path safely around hazard (${robot.path.length} waypoints).`, 'info');
 
         } else {
@@ -631,193 +706,236 @@
     // ═══════════════════════════════════════════════════════════════════════
     //  ROBOT LOGIC & MOVEMENT LOOP
     // ═══════════════════════════════════════════════════════════════════════
-    function updateRobot() {
+    function updateRobots() {
         if (!isRunning) return;
 
-        robot.cellC = Math.floor(robot.x / CELL_SIZE);
-        robot.cellR = Math.floor(robot.y / CELL_SIZE);
-        robot.radarAngle = (robot.radarAngle + 0.06) % (Math.PI * 2);
+        robots.forEach(bot => {
+            bot.cellC = Math.floor(bot.x / CELL_SIZE);
+            bot.cellR = Math.floor(bot.y / CELL_SIZE);
+            bot.radarAngle = (bot.radarAngle + 0.06) % (Math.PI * 2);
 
-        // 1. Fog-of-War Exploration Pass & Heatmap Visit Tracking
-        const scanDistPx = SCAN_RADIUS_CELLS * CELL_SIZE;
-        for (let r = 0; r < ROWS; r++) {
-            for (let c = 0; c < COLS; c++) {
-                if (!exploredGrid[r][c]) {
-                    const cx = (c + 0.5) * CELL_SIZE;
-                    const cy = (r + 0.5) * CELL_SIZE;
-                    if (Math.hypot(cx - robot.x, cy - robot.y) <= scanDistPx + 12) {
-                        exploredGrid[r][c] = true;
+            // 1. Fog-of-War Exploration Pass & Heatmap Visit Tracking
+            const scanDistPx = SCAN_RADIUS_CELLS * CELL_SIZE;
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    if (!exploredGrid[r][c]) {
+                        const cx = (c + 0.5) * CELL_SIZE;
+                        const cy = (r + 0.5) * CELL_SIZE;
+                        if (Math.hypot(cx - bot.x, cy - bot.y) <= scanDistPx + 12) {
+                            exploredGrid[r][c] = true;
+                        }
                     }
                 }
             }
-        }
 
-        if (robot.cellR >= 0 && robot.cellR < ROWS && robot.cellC >= 0 && robot.cellC < COLS) {
-            visitHeatmap[robot.cellR][robot.cellC] = (visitHeatmap[robot.cellR][robot.cellC] || 0) + 1;
-        }
-
-        // Battery level simulation
-        if (robot.state === 'DOCKING') {
-            robot.battery = Math.min(100, (robot.battery || 100) + 0.6);
-        } else {
-            robot.battery = Math.max(12, (robot.battery || 100) - 0.012);
-        }
-
-        // Exploration breadcrumbs trail
-        robot.trail = robot.trail || [];
-        if (robot.trail.length === 0 || Math.hypot(robot.x - robot.trail[robot.trail.length - 1].x, robot.y - robot.trail[robot.trail.length - 1].y) > 14) {
-            robot.trail.push({ x: robot.x, y: robot.y, alpha: 0.6 });
-            if (robot.trail.length > 40) robot.trail.shift();
-        }
-
-        // 2. Radar Scanning for Unseen Objects
-        items.forEach(item => {
-            if (!item.detected && !item.picked && !item.recording) {
-                const dx = item.x - robot.x;
-                const dy = item.y - robot.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-
-                if (dist <= scanDistPx) {
-                    item.detected = true;
-                    if (item.isHazard) {
-                        dynamicObstacles.add(`${item.c},${item.r}`);
-                        replanPathAroundHazards();
-                    }
-                    robot.lockOnTarget = {
-                        x: item.x,
-                        y: item.y,
-                        alpha: 1.0,
-                        color: item.isHazard ? '#E85D4A' : '#0FB8A0',
-                        text: item.isHazard ? item.hazardInfo.name : ROUTINE_CLUSTERS[item.type].label
-                    };
-                    recordMemoryToQdrant(item);
-                }
+            if (bot.cellR >= 0 && bot.cellR < ROWS && bot.cellC >= 0 && bot.cellC < COLS) {
+                visitHeatmap[bot.cellR][bot.cellC] = (visitHeatmap[bot.cellR][bot.cellC] || 0) + 1;
             }
-        });
 
-        // 3. State Machine & Autonomous Patrol
-        if (robot.cargo.length >= robot.maxCargo && robot.state !== 'RETURNING' && robot.state !== 'DOCKING') {
-            robot.state = 'RETURNING';
-            const pathToDock = findPathBFS(robot.cellC, robot.cellR, 1, 1);
-            if (pathToDock && pathToDock.length > 0) {
-                robot.path = pathToDock;
-                logSim(`📦 Cargo capacity reached (${robot.cargo.length}/${robot.maxCargo}) — Navigating to Dock (1,1)...`, 'info');
+            // Battery level simulation
+            if (bot.state === 'DOCKING') {
+                bot.battery = Math.min(100, (bot.battery || 100) + 0.6);
             } else {
-                logSim(`⚠️ Dock (1,1) blocked by hazards! Emergency field depot unload engaged.`, 'warning');
-                robot.state = 'DOCKING';
-                setTimeout(() => {
-                    const unloaded = robot.cargo.length;
-                    robot.cargo = [];
-                    logSim(`⚡ FIELD DEPOT: Unloaded ${unloaded} cargo items safely outside hazard perimeter.`, 'success');
-                    robot.state = 'PATROLLING';
-                    findLocalPatrolPath();
-                }, 800);
+                bot.battery = Math.max(12, (bot.battery || 100) - 0.012);
             }
-        } else if (robot.state === 'PATROLLING' || robot.state === 'STANDBY') {
-            robot.state = 'PATROLLING';
-            // Find nearest reachable unpicked routine item
-            const available = items.filter(it => !it.isHazard && !it.picked);
-            let nearest = null;
-            let minPathLen = Infinity;
-            let bestPath = null;
 
-            available.forEach(it => {
-                const p = findPathBFS(robot.cellC, robot.cellR, it.c, it.r);
-                if (p && p.length < minPathLen) {
-                    minPathLen = p.length;
-                    nearest = it;
-                    bestPath = p;
+            // Exploration breadcrumbs trail
+            bot.trail = bot.trail || [];
+            if (bot.trail.length === 0 || Math.hypot(bot.x - bot.trail[bot.trail.length - 1].x, bot.y - bot.trail[bot.trail.length - 1].y) > 14) {
+                bot.trail.push({ x: bot.x, y: bot.y, alpha: 0.6 });
+                if (bot.trail.length > 40) bot.trail.shift();
+            }
+
+            // 2. Radar Scanning for Unseen Objects
+            items.forEach(item => {
+                if (!item.detected && !item.picked && !item.recording) {
+                    const dx = item.x - bot.x;
+                    const dy = item.y - bot.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist <= scanDistPx) {
+                        item.detected = true;
+                        if (item.isHazard) {
+                            dynamicObstacles.add(`${item.c},${item.r}`);
+                            replanPathAroundHazards(bot);
+                        }
+                        bot.lockOnTarget = {
+                            x: item.x,
+                            y: item.y,
+                            alpha: 1.0,
+                            color: item.isHazard ? '#E85D4A' : bot.color,
+                            text: item.isHazard ? `${item.hazardInfo.name} [${bot.name}]` : ROUTINE_CLUSTERS[item.type].label
+                        };
+                        recordMemoryToQdrant(item, bot);
+                    }
                 }
             });
 
-            if (nearest && bestPath) {
-                robot.targetItem = nearest;
-                robot.path = bestPath;
-                robot.state = 'PICKING';
-            } else {
-                // No reachable items!
-                autoSpawnTimer++;
-                if (autoSpawnTimer >= 120) { // every 2s
-                    autoSpawnTimer = 0;
-                    spawnRoutineItems(4);
+            // 3. State Machine & Autonomous Patrol
+            if (bot.cargo.length >= bot.maxCargo && bot.state !== 'RETURNING' && bot.state !== 'DOCKING') {
+                bot.state = 'RETURNING';
+                const pathToDock = findPathBFS(bot.cellC, bot.cellR, bot.dockC, bot.dockR);
+                if (pathToDock && pathToDock.length > 0) {
+                    bot.path = pathToDock;
+                    logSim(`📦 ${bot.name} cargo full (${bot.cargo.length}/${bot.maxCargo}) — Returning to Dock (${bot.dockC},${bot.dockR})...`, 'info');
+                } else {
+                    logSim(`⚠️ ${bot.name} Dock (${bot.dockC},${bot.dockR}) blocked! Field depot unload engaged.`, 'warning');
+                    bot.state = 'DOCKING';
+                    setTimeout(() => {
+                        const unloaded = bot.cargo.length;
+                        bot.cargo = [];
+                        logSim(`⚡ ${bot.name} FIELD DEPOT: Unloaded ${unloaded} items safely.`, 'success');
+                        bot.state = 'PATROLLING';
+                        findLocalPatrolPath(bot);
+                    }, 800);
                 }
-                // If robot has no path, patrol reachable open waypoints in current zone
-                if (!robot.path || robot.path.length === 0) {
-                    findLocalPatrolPath();
+            } else if (bot.state === 'PATROLLING' || bot.state === 'STANDBY') {
+                bot.state = 'PATROLLING';
+                // Find nearest reachable unpicked routine item in/near bot zone
+                const available = items.filter(it => !it.isHazard && !it.picked && !robots.some(other => other !== bot && other.targetItem === it));
+                let nearest = null;
+                let minPathLen = Infinity;
+                let bestPath = null;
+
+                available.forEach(it => {
+                    const p = findPathBFS(bot.cellC, bot.cellR, it.c, it.r);
+                    if (p && p.length < minPathLen) {
+                        minPathLen = p.length;
+                        nearest = it;
+                        bestPath = p;
+                    }
+                });
+
+                if (nearest && bestPath) {
+                    bot.targetItem = nearest;
+                    bot.path = bestPath;
+                    bot.state = 'PICKING';
+                } else {
+                    // If bot has no path, patrol reachable open waypoints in bot zone
+                    if (!bot.path || bot.path.length === 0) {
+                        findLocalPatrolPath(bot);
+                    }
                 }
             }
-        }
 
-        // 4. Movement Execution
-        if (robot.path && robot.path.length > 0) {
-            const nextNode = robot.path[0];
+            // 4. Movement Execution
+            if (bot.path && bot.path.length > 0) {
+                const nextNode = bot.path[0];
 
-            // Obstacle & Hazard Collision Avoidance Guard:
-            if (dynamicObstacles.has(`${nextNode.c},${nextNode.r}`)) {
-                logSim(`⚠️ Hazard blocking route at (${nextNode.c}, ${nextNode.r})! Rerouting dynamically...`, 'warning');
-                robot.path = [];
-                replanPathAroundHazards();
-                return;
-            }
+                // Obstacle & Hazard Collision Avoidance Guard
+                if (dynamicObstacles.has(`${nextNode.c},${nextNode.r}`)) {
+                    logSim(`⚠️ [${bot.name}] Hazard blocking route at (${nextNode.c}, ${nextNode.r})! Rerouting dynamically...`, 'warning');
+                    bot.path = [];
+                    replanPathAroundHazards(bot);
+                } else {
+                    const dx = nextNode.x - bot.x;
+                    const dy = nextNode.y - bot.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
 
-            const dx = nextNode.x - robot.x;
-            const dy = nextNode.y - robot.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
+                    const targetHeading = Math.atan2(dy, dx);
+                    let diff = targetHeading - bot.heading;
+                    while (diff < -Math.PI) diff += Math.PI * 2;
+                    while (diff > Math.PI) diff -= Math.PI * 2;
+                    bot.heading += diff * 0.25;
 
-            const targetHeading = Math.atan2(dy, dx);
-            let diff = targetHeading - robot.heading;
-            while (diff < -Math.PI) diff += Math.PI * 2;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            robot.heading += diff * 0.25;
+                    if (dist < bot.speed) {
+                        bot.x = nextNode.x;
+                        bot.y = nextNode.y;
+                        bot.path.shift();
 
-            if (dist < robot.speed) {
-                robot.x = nextNode.x;
-                robot.y = nextNode.y;
-                robot.path.shift();
-
-                if (robot.path.length === 0) {
-                    if (robot.state === 'PICKING' && robot.targetItem && !robot.targetItem.picked) {
-                        robot.targetItem.picked = true;
-                        robot.cargo.push(robot.targetItem);
-                        logSim(`Picked up cargo: ${robot.targetItem.type.toUpperCase()} (Loaded: ${robot.cargo.length}/${robot.maxCargo})`, 'info');
-                        robot.state = 'PATROLLING';
-                        robot.targetItem = null;
-                    } else if (robot.state === 'RETURNING') {
-                        robot.state = 'DOCKING';
+                        if (bot.path.length === 0) {
+                            if (bot.state === 'PICKING' && bot.targetItem && !bot.targetItem.picked) {
+                                bot.targetItem.picked = true;
+                                bot.cargo.push(bot.targetItem);
+                                logSim(`[${bot.name}] Picked up ${bot.targetItem.type.toUpperCase()} (Loaded: ${bot.cargo.length}/${bot.maxCargo})`, 'info');
+                                bot.state = 'PATROLLING';
+                                bot.targetItem = null;
+                            } else if (bot.state === 'RETURNING') {
+                                bot.state = 'DOCKING';
+                                setTimeout(() => {
+                                    const unloaded = bot.cargo.length;
+                                    bot.cargo = [];
+                                    logSim(`⚡ ${bot.name} DOCK: Unloaded ${unloaded} items. Synced to Qdrant Edge.`, 'success');
+                                    bot.state = 'PATROLLING';
+                                    findLocalPatrolPath(bot);
+                                }, 700);
+                            }
+                        }
+                    } else {
+                        bot.x += Math.cos(targetHeading) * bot.speed;
+                        bot.y += Math.sin(targetHeading) * bot.speed;
+                    }
+                }
+            } else if (!bot.path || bot.path.length === 0) {
+                if (bot.state === 'RETURNING') {
+                    // Try to replan to dock, or field unload if dock is unreachable
+                    const pathToDock = findPathBFS(bot.cellC, bot.cellR, bot.dockC, bot.dockR);
+                    if (pathToDock && pathToDock.length > 0) {
+                        bot.path = pathToDock;
+                    } else {
+                        // Field unload if dock is blocked by hazards
+                        bot.state = 'DOCKING';
                         setTimeout(() => {
-                            const unloaded = robot.cargo.length;
-                            robot.cargo = [];
-                            logSim(`⚡ DOCK STATION: Unloaded ${unloaded} cargo items. Batch buffer synced to local memory.`, 'success');
-                            robot.state = 'PATROLLING';
-                        }, 700);
+                            const unloaded = bot.cargo.length;
+                            bot.cargo = [];
+                            logSim(`⚡ ${bot.name} FIELD DEPOT: Emergency field unload (${unloaded} items). Corridor clear.`, 'success');
+                            bot.state = 'PATROLLING';
+                            findLocalPatrolPath(bot);
+                        }, 600);
+                    }
+                } else if (bot.state === 'PICKING' || bot.state === 'PATROLLING') {
+                    bot.state = 'PATROLLING';
+                    findLocalPatrolPath(bot);
+                }
+            }
+
+            // 4b. Physical Hazard Separation Guard
+            items.forEach(it => {
+                if (it.isHazard) {
+                    const dist = Math.hypot(bot.x - it.x, bot.y - it.y);
+                    const safeDist = CELL_SIZE * 0.95;
+                    if (dist < safeDist && dist > 0) {
+                        const angle = Math.atan2(bot.y - it.y, bot.x - it.x);
+                        const push = (safeDist - dist) + 1;
+                        bot.x += Math.cos(angle) * push;
+                        bot.y += Math.sin(angle) * push;
+                        bot.cellC = Math.max(0, Math.min(COLS - 1, Math.floor(bot.x / CELL_SIZE)));
+                        bot.cellR = Math.max(0, Math.min(ROWS - 1, Math.floor(bot.y / CELL_SIZE)));
+                        if (bot.path && bot.path.some(pt => dynamicObstacles.has(`${pt.c},${pt.r}`))) {
+                            replanPathAroundHazards(bot);
+                        }
                     }
                 }
-            } else {
-                robot.x += Math.cos(targetHeading) * robot.speed;
-                robot.y += Math.sin(targetHeading) * robot.speed;
+            });
+        });
+
+        // 4c. Inter-Robot Collision Avoidance & Priority Yielding (Alpha vs Bravo)
+        const dAlphaBravo = Math.hypot(robotAlpha.x - robotBravo.x, robotAlpha.y - robotBravo.y);
+        const minBotSeparation = CELL_SIZE * 0.95;
+        if (dAlphaBravo < minBotSeparation && dAlphaBravo > 0) {
+            // Bravo gently yields waypoint priority to Alpha if their paths cross
+            if (robotBravo.path && robotBravo.path.length > 0) {
+                const nextB = robotBravo.path[0];
+                if (Math.hypot(nextB.x - robotAlpha.x, nextB.y - robotAlpha.y) < CELL_SIZE) {
+                    findLocalPatrolPath(robotBravo);
+                }
+            } else if (robotAlpha.path && robotAlpha.path.length > 0) {
+                const nextA = robotAlpha.path[0];
+                if (Math.hypot(nextA.x - robotBravo.x, nextA.y - robotBravo.y) < CELL_SIZE) {
+                    findLocalPatrolPath(robotAlpha);
+                }
             }
-        } else if (robot.state === 'PICKING' && (!robot.path || robot.path.length === 0)) {
-            robot.state = 'PATROLLING';
         }
 
-        // 4b. Physical Hazard Separation Guard (Robot never clips into or covers hazard)
-        items.forEach(it => {
-            if (it.isHazard) {
-                const dist = Math.hypot(robot.x - it.x, robot.y - it.y);
-                const safeDist = CELL_SIZE * 0.95;
-                if (dist < safeDist && dist > 0) {
-                    const angle = Math.atan2(robot.y - it.y, robot.x - it.x);
-                    const push = (safeDist - dist) + 1;
-                    robot.x += Math.cos(angle) * push;
-                    robot.y += Math.sin(angle) * push;
-                    robot.cellC = Math.max(0, Math.min(COLS - 1, Math.floor(robot.x / CELL_SIZE)));
-                    robot.cellR = Math.max(0, Math.min(ROWS - 1, Math.floor(robot.y / CELL_SIZE)));
-                    if (robot.path && robot.path.some(pt => dynamicObstacles.has(`${pt.c},${pt.r}`))) {
-                        replanPathAroundHazards();
-                    }
-                }
+        // Global cargo auto-spawn if floor is sparse
+        const unpickedCargo = items.filter(it => !it.isHazard && !it.picked);
+        if (unpickedCargo.length < 3) {
+            autoSpawnTimer++;
+            if (autoSpawnTimer >= 120) {
+                autoSpawnTimer = 0;
+                spawnRoutineItems(4);
             }
-        });
+        }
 
         // 5. Batch Lane Flush Timer (every 8s)
         batchFlushTimer++;
@@ -840,13 +958,15 @@
     async function consolidateSimulationMemories() {
         logSim(`🧬 Triggering Sleep Cycle: Sending request to real DBSCAN consolidation engine...`, 'warning');
         
-        pulses.push({
-            x: robot.x,
-            y: robot.y,
-            radius: 20,
-            maxRadius: 200,
-            color: '#F5A623',
-            alpha: 0.95
+        robots.forEach(bot => {
+            pulses.push({
+                x: bot.x,
+                y: bot.y,
+                radius: 20,
+                maxRadius: 180,
+                color: '#F5A623',
+                alpha: 0.95
+            });
         });
 
         const res = await callBackend('/api/consolidate', { method: 'POST' });
@@ -948,7 +1068,7 @@
                     ctx.strokeRect(x + 4, y + 4, CELL_SIZE - 8, CELL_SIZE - 8);
                 } else if (cellType === 2) {
                     ctx.save();
-                    // Crisp Charging Pad
+                    // Dock Alpha Pad (Teal)
                     ctx.fillStyle = 'rgba(15, 184, 160, 0.12)';
                     ctx.fillRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
                     
@@ -962,50 +1082,73 @@
 
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.font = '700 8.5px "Fira Code", monospace';
+                    ctx.font = '700 8px "Fira Code", monospace';
                     ctx.fillStyle = '#0FB8A0';
-                    ctx.fillText('⚡DOCK', x + (CELL_SIZE / 2), y + (CELL_SIZE / 2));
+                    ctx.fillText('⚡ALPHA', x + (CELL_SIZE / 2), y + (CELL_SIZE / 2));
+                    ctx.restore();
+                } else if (cellType === 3) {
+                    ctx.save();
+                    // Dock Bravo Pad (Amber)
+                    ctx.fillStyle = 'rgba(245, 166, 35, 0.12)';
+                    ctx.fillRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+                    
+                    ctx.strokeStyle = '#F5A623';
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeRect(x + 2, y + 2, CELL_SIZE - 4, CELL_SIZE - 4);
+                    
+                    ctx.strokeStyle = 'rgba(245, 166, 35, 0.35)';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(x + 6, y + 6, CELL_SIZE - 12, CELL_SIZE - 12);
+
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.font = '700 8px "Fira Code", monospace';
+                    ctx.fillStyle = '#F5A623';
+                    ctx.fillText('⚡BRAVO', x + (CELL_SIZE / 2), y + (CELL_SIZE / 2));
                     ctx.restore();
                 }
             }
         }
 
-        // 5. Exploration Trail Breadcrumbs
-        if (robot.trail && robot.trail.length > 1) {
-            ctx.save();
-            ctx.strokeStyle = 'rgba(15, 184, 160, 0.35)';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([2, 4]);
-            ctx.beginPath();
-            ctx.moveTo(robot.trail[0].x, robot.trail[0].y);
-            for (let i = 1; i < robot.trail.length; i++) {
-                ctx.lineTo(robot.trail[i].x, robot.trail[i].y);
-            }
-            ctx.stroke();
-            ctx.setLineDash([]);
-
-            // Breadcrumb dots
-            robot.trail.forEach((pt, idx) => {
-                const alpha = (idx / robot.trail.length) * 0.6;
-                ctx.fillStyle = `rgba(15, 184, 160, ${alpha})`;
+        // 5. Exploration Trail Breadcrumbs (For Both Robots)
+        robots.forEach(bot => {
+            if (bot.trail && bot.trail.length > 1) {
+                ctx.save();
+                ctx.strokeStyle = bot.id === 'edge-001' ? 'rgba(15, 184, 160, 0.35)' : 'rgba(245, 166, 35, 0.35)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([2, 4]);
                 ctx.beginPath();
-                ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
-                ctx.fill();
-            });
-            ctx.restore();
-        }
+                ctx.moveTo(bot.trail[0].x, bot.trail[0].y);
+                for (let i = 1; i < bot.trail.length; i++) {
+                    ctx.lineTo(bot.trail[i].x, bot.trail[i].y);
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
 
-        // 6. Draw Planned BFS Path
-        if (robot.path && robot.path.length > 0) {
-            ctx.beginPath();
-            ctx.strokeStyle = 'rgba(15, 184, 160, 0.65)';
-            ctx.lineWidth = 3;
-            ctx.setLineDash([5, 5]);
-            ctx.moveTo(robot.x, robot.y);
-            robot.path.forEach(pt => ctx.lineTo(pt.x, pt.y));
-            ctx.stroke();
-            ctx.setLineDash([]);
-        }
+                bot.trail.forEach((pt, idx) => {
+                    const alpha = (idx / bot.trail.length) * 0.6;
+                    ctx.fillStyle = bot.id === 'edge-001' ? `rgba(15, 184, 160, ${alpha})` : `rgba(245, 166, 35, ${alpha})`;
+                    ctx.beginPath();
+                    ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+                ctx.restore();
+            }
+        });
+
+        // 6. Draw Planned BFS Paths (Both Robots)
+        robots.forEach(bot => {
+            if (bot.path && bot.path.length > 0) {
+                ctx.beginPath();
+                ctx.strokeStyle = bot.id === 'edge-001' ? 'rgba(15, 184, 160, 0.65)' : 'rgba(245, 166, 35, 0.65)';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([5, 5]);
+                ctx.moveTo(bot.x, bot.y);
+                bot.path.forEach(pt => ctx.lineTo(pt.x, pt.y));
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        });
 
         // 7. Draw Items & Hazards
         items.forEach(item => {
@@ -1139,126 +1282,133 @@
             }
         }
 
-        // 10. Lock-On Laser Target Reticle
-        if (robot.lockOnTarget && robot.lockOnTarget.alpha > 0) {
-            ctx.save();
-            ctx.strokeStyle = robot.lockOnTarget.color;
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = robot.lockOnTarget.alpha;
-            
-            // Laser beam from robot to target
-            ctx.beginPath();
-            ctx.moveTo(robot.x, robot.y);
-            ctx.lineTo(robot.lockOnTarget.x, robot.lockOnTarget.y);
-            ctx.stroke();
-
-            // Reticle circle
-            ctx.beginPath();
-            ctx.arc(robot.lockOnTarget.x, robot.lockOnTarget.y, 22, 0, Math.PI * 2);
-            ctx.stroke();
-
-            ctx.font = '600 10px Fira Code, monospace';
-            ctx.fillStyle = robot.lockOnTarget.color;
-            ctx.fillText(`LOCKED ON: ${robot.lockOnTarget.text}`, robot.lockOnTarget.x, robot.lockOnTarget.y + 32);
-
-            ctx.restore();
-            robot.lockOnTarget.alpha -= 0.015;
-            if (robot.lockOnTarget.alpha <= 0) robot.lockOnTarget = null;
-        }
-
-        // 11. Draw Robot & 3.5-Cell Radar Scanner
+        // 10, 11, 12. Draw Both Robots (Alpha & Bravo): Lock-On, Radar, Chassis, and Mini-HUD
         const scanDistPx = SCAN_RADIUS_CELLS * CELL_SIZE;
 
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(robot.x, robot.y, scanDistPx, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(15, 184, 160, 0.07)';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(15, 184, 160, 0.3)';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
+        robots.forEach(bot => {
+            // Lock-On Laser Target Reticle for this robot
+            if (bot.lockOnTarget && bot.lockOnTarget.alpha > 0) {
+                ctx.save();
+                ctx.strokeStyle = bot.lockOnTarget.color;
+                ctx.lineWidth = 2;
+                ctx.globalAlpha = bot.lockOnTarget.alpha;
+                
+                // Laser beam from robot to target
+                ctx.beginPath();
+                ctx.moveTo(bot.x, bot.y);
+                ctx.lineTo(bot.lockOnTarget.x, bot.lockOnTarget.y);
+                ctx.stroke();
 
-        ctx.beginPath();
-        ctx.moveTo(robot.x, robot.y);
-        ctx.arc(robot.x, robot.y, scanDistPx, robot.radarAngle - 0.4, robot.radarAngle + 0.4);
-        ctx.lineTo(robot.x, robot.y);
-        const grad = ctx.createRadialGradient(robot.x, robot.y, 0, robot.x, robot.y, scanDistPx);
-        grad.addColorStop(0, 'rgba(15, 184, 160, 0.45)');
-        grad.addColorStop(1, 'rgba(15, 184, 160, 0.0)');
-        ctx.fillStyle = grad;
-        ctx.fill();
-        ctx.restore();
+                // Reticle circle
+                ctx.beginPath();
+                ctx.arc(bot.lockOnTarget.x, bot.lockOnTarget.y, 22, 0, Math.PI * 2);
+                ctx.stroke();
 
-        // Robot Chassis
-        ctx.save();
-        ctx.translate(robot.x, robot.y);
-        ctx.rotate(robot.heading);
+                ctx.font = '600 10px Fira Code, monospace';
+                ctx.fillStyle = bot.lockOnTarget.color;
+                ctx.fillText(`LOCKED ON: ${bot.lockOnTarget.text}`, bot.lockOnTarget.x, bot.lockOnTarget.y + 32);
 
-        ctx.fillStyle = '#16213E';
-        ctx.beginPath();
-        ctx.arc(0, 0, 13, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#0FB8A0';
-        ctx.lineWidth = 2.5;
-        ctx.stroke();
+                ctx.restore();
+                bot.lockOnTarget.alpha -= 0.015;
+                if (bot.lockOnTarget.alpha <= 0) bot.lockOnTarget = null;
+            }
 
-        ctx.fillStyle = '#0FB8A0';
-        ctx.beginPath();
-        ctx.arc(10, 0, 4, 0, Math.PI * 2);
-        ctx.fill();
-
-        for (let i = 0; i < robot.maxCargo; i++) {
-            const angle = Math.PI * 0.7 + i * 0.3;
-            const cx = Math.cos(angle) * 7;
-            const cy = Math.sin(angle) * 7;
-            ctx.fillStyle = i < robot.cargo.length ? '#0FB8A0' : '#4A5568';
+            // Radar Scanner Cone
+            ctx.save();
             ctx.beginPath();
-            ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+            ctx.arc(bot.x, bot.y, scanDistPx, 0, Math.PI * 2);
+            ctx.fillStyle = bot.id === 'edge-001' ? 'rgba(15, 184, 160, 0.07)' : 'rgba(245, 166, 35, 0.07)';
             ctx.fill();
-        }
-        ctx.restore();
+            ctx.strokeStyle = bot.id === 'edge-001' ? 'rgba(15, 184, 160, 0.3)' : 'rgba(245, 166, 35, 0.3)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
 
-        // 12. Floating Robot Mini-HUD (Rendered directly above robot)
-        ctx.save();
-        const hudX = Math.max(70, Math.min(W - 70, robot.x));
-        const hudY = Math.max(30, robot.y - 32);
+            ctx.beginPath();
+            ctx.moveTo(bot.x, bot.y);
+            ctx.arc(bot.x, bot.y, scanDistPx, bot.radarAngle - 0.4, bot.radarAngle + 0.4);
+            ctx.lineTo(bot.x, bot.y);
+            const grad = ctx.createRadialGradient(bot.x, bot.y, 0, bot.x, bot.y, scanDistPx);
+            if (bot.id === 'edge-001') {
+                grad.addColorStop(0, 'rgba(15, 184, 160, 0.45)');
+                grad.addColorStop(1, 'rgba(15, 184, 160, 0.0)');
+            } else {
+                grad.addColorStop(0, 'rgba(245, 166, 35, 0.45)');
+                grad.addColorStop(1, 'rgba(245, 166, 35, 0.0)');
+            }
+            ctx.fillStyle = grad;
+            ctx.fill();
+            ctx.restore();
 
-        ctx.fillStyle = 'rgba(10, 15, 29, 0.92)';
-        ctx.beginPath();
-        ctx.roundRect(hudX - 60, hudY - 14, 120, 22, 6);
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(15, 184, 160, 0.7)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
+            // Robot Chassis
+            ctx.save();
+            ctx.translate(bot.x, bot.y);
+            ctx.rotate(bot.heading);
 
-        // Battery level icon + %
-        const batt = Math.round(robot.battery || 100);
-        const battColor = batt > 50 ? '#0FB8A0' : (batt > 25 ? '#F5A623' : '#E85D4A');
-        ctx.font = '700 8.5px "Fira Code", monospace';
-        ctx.fillStyle = battColor;
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(`⚡${batt}%`, hudX - 52, hudY - 3);
+            ctx.fillStyle = '#16213E';
+            ctx.beginPath();
+            ctx.arc(0, 0, 13, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = bot.color;
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
 
-        // Cargo slots representation [📦][📦][ ]
-        let cargoStr = '';
-        for (let i = 0; i < robot.maxCargo; i++) {
-            cargoStr += i < robot.cargo.length ? '📦' : '▫️';
-        }
-        ctx.font = '8px Inter, sans-serif';
-        ctx.textAlign = 'right';
-        ctx.fillText(cargoStr, hudX + 52, hudY - 3);
+            ctx.fillStyle = bot.color;
+            ctx.beginPath();
+            ctx.arc(10, 0, 4, 0, Math.PI * 2);
+            ctx.fill();
 
-        // Target / state subtitle pill
-        ctx.font = '600 7.5px "Fira Code", monospace';
-        ctx.fillStyle = '#94A3B8';
-        ctx.textAlign = 'center';
-        const targetText = robot.targetItem
-            ? `TARGET: (${robot.targetItem.c},${robot.targetItem.r})`
-            : (robot.state === 'DOCKING' ? 'RECHARGING' : robot.state);
-        ctx.fillText(targetText, hudX, hudY + 5);
+            for (let i = 0; i < bot.maxCargo; i++) {
+                const angle = Math.PI * 0.7 + i * 0.3;
+                const cx = Math.cos(angle) * 7;
+                const cy = Math.sin(angle) * 7;
+                ctx.fillStyle = i < bot.cargo.length ? bot.color : '#4A5568';
+                ctx.beginPath();
+                ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore();
 
-        ctx.restore();
+            // Floating Robot Mini-HUD
+            ctx.save();
+            const hudX = Math.max(70, Math.min(W - 70, bot.x));
+            const hudY = Math.max(30, bot.y - 32);
+
+            ctx.fillStyle = 'rgba(10, 15, 29, 0.92)';
+            ctx.beginPath();
+            ctx.roundRect(hudX - 64, hudY - 14, 128, 22, 6);
+            ctx.fill();
+            ctx.strokeStyle = bot.color;
+            ctx.lineWidth = 1.2;
+            ctx.stroke();
+
+            // Robot identifier name tag + battery %
+            const batt = Math.round(bot.battery || 100);
+            ctx.font = '700 8.5px "Fira Code", monospace';
+            ctx.fillStyle = bot.color;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(`${bot.name} ⚡${batt}%`, hudX - 58, hudY - 3);
+
+            // Cargo slots representation [📦][📦][ ]
+            let cargoStr = '';
+            for (let i = 0; i < bot.maxCargo; i++) {
+                cargoStr += i < bot.cargo.length ? '📦' : '▫️';
+            }
+            ctx.font = '8px Inter, sans-serif';
+            ctx.textAlign = 'right';
+            ctx.fillText(cargoStr, hudX + 56, hudY - 3);
+
+            // Target / state subtitle pill
+            ctx.font = '600 7.5px "Fira Code", monospace';
+            ctx.fillStyle = '#94A3B8';
+            ctx.textAlign = 'center';
+            const targetText = bot.targetItem
+                ? `TARGET: (${bot.targetItem.c},${bot.targetItem.r})`
+                : (bot.state === 'DOCKING' ? 'RECHARGING' : bot.state);
+            ctx.fillText(targetText, hudX, hudY + 5);
+
+            ctx.restore();
+        });
 
         // 13. On-Screen Status Banner overlay
         if (onScreenBanner && onScreenBanner.timer > 0) {
@@ -1444,18 +1594,35 @@
         pulses = [];
         fastLane = [];
         batchLane = [];
-        robot.x = 1.5 * CELL_SIZE;
-        robot.y = 1.5 * CELL_SIZE;
-        robot.cellC = 1;
-        robot.cellR = 1;
-        robot.heading = 0;
-        robot.battery = 100;
-        robot.cargo = [];
-        robot.trail = [];
-        robot.state = isRunning ? 'PATROLLING' : 'STANDBY';
-        robot.path = [];
-        robot.targetItem = null;
-        robot.lockOnTarget = null;
+
+        // Reset Robot Alpha (edge-001)
+        robotAlpha.x = 1.5 * CELL_SIZE;
+        robotAlpha.y = 1.5 * CELL_SIZE;
+        robotAlpha.cellC = 1;
+        robotAlpha.cellR = 1;
+        robotAlpha.heading = 0;
+        robotAlpha.battery = 100;
+        robotAlpha.cargo = [];
+        robotAlpha.trail = [];
+        robotAlpha.state = isRunning ? 'PATROLLING' : 'STANDBY';
+        robotAlpha.path = [];
+        robotAlpha.targetItem = null;
+        robotAlpha.lockOnTarget = null;
+
+        // Reset Robot Bravo (edge-002)
+        robotBravo.x = 20.5 * CELL_SIZE;
+        robotBravo.y = 1.5 * CELL_SIZE;
+        robotBravo.cellC = 20;
+        robotBravo.cellR = 1;
+        robotBravo.heading = Math.PI;
+        robotBravo.battery = 100;
+        robotBravo.cargo = [];
+        robotBravo.trail = [];
+        robotBravo.state = isRunning ? 'PATROLLING' : 'STANDBY';
+        robotBravo.path = [];
+        robotBravo.targetItem = null;
+        robotBravo.lockOnTarget = null;
+
         lastVectorMatch = null;
         savedToQdrantCount = 0;
 
@@ -1463,15 +1630,18 @@
         exploredGrid = Array.from({ length: ROWS }, () => Array(COLS).fill(false));
         visitHeatmap = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
 
-        // Uncover initial dock region
+        // Uncover initial dock regions for both robots
         for (let r = 0; r <= 3; r++) {
             for (let c = 0; c <= 3; c++) {
                 exploredGrid[r][c] = true;
             }
+            for (let c = 18; c <= 21; c++) {
+                exploredGrid[r][c] = true;
+            }
         }
 
-        spawnRoutineItems(6);
-        logSim('Arena, LiDAR telemetry & Vector Store reset to factory baseline.', 'info');
+        spawnRoutineItems(7);
+        logSim('Multi-Robot Fleet initialized: Alpha (edge-001) in Zone A/B, Bravo (edge-002) in Zone C.', 'info');
         renderLanes();
         updatePills();
     }
@@ -1481,15 +1651,15 @@
         const btn = document.getElementById('btn-sim-toggle');
         if (btn) {
             if (isRunning) {
-                btn.textContent = '⏸ Pause Mission';
+                btn.textContent = '⏸ Pause Fleet Mission';
                 btn.style.background = '#E85D4A';
-                robot.state = 'PATROLLING';
-                logSim('▶ Mission Started: Autonomous warehouse LiDAR patrol & Qdrant recording active.', 'success');
+                robots.forEach(r => r.state = 'PATROLLING');
+                logSim('▶ Fleet Mission Active: Alpha (edge-001) & Bravo (edge-002) patrol and edge sync active.', 'success');
             } else {
-                btn.textContent = '▶ Start Mission';
+                btn.textContent = '▶ Start Fleet Mission';
                 btn.style.background = '#0FB8A0';
-                robot.state = 'STANDBY';
-                logSim('⏸ Mission Paused: Robot held at current station.', 'info');
+                robots.forEach(r => r.state = 'STANDBY');
+                logSim('⏸ Fleet Mission Paused: Both robots held at current positions.', 'info');
             }
         }
         updatePills();
@@ -1499,7 +1669,7 @@
     //  MAIN ANIMATION LOOP (60 FPS)
     // ═══════════════════════════════════════════════════════════════════════
     function loop() {
-        updateRobot();
+        updateRobots();
         renderArena();
         renderScatter();
         animFrameId = requestAnimationFrame(loop);

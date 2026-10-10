@@ -424,15 +424,15 @@
                     <div class="card sim-toolbar mb-4">
                         <div class="sim-toolbar-left">
                             <div class="sim-pill">
-                                <span class="sim-pill-label">Robot:</span>
-                                <span class="sim-pill-val" id="sim-stat-state" style="color:var(--signal-teal);font-weight:700">STANDBY</span>
+                                <span class="sim-pill-label" style="color:var(--signal-teal);font-weight:700">Alpha [001]:</span>
+                                <span class="sim-pill-val" id="sim-stat-state-alpha" style="color:var(--signal-teal);font-weight:700">STANDBY</span>
                             </div>
                             <div class="sim-pill">
-                                <span class="sim-pill-label">Cargo:</span>
-                                <span class="sim-pill-val" id="sim-stat-cargo">0 / 3</span>
+                                <span class="sim-pill-label" style="color:#F5A623;font-weight:700">Bravo [002]:</span>
+                                <span class="sim-pill-val" id="sim-stat-state-bravo" style="color:#F5A623;font-weight:700">STANDBY</span>
                             </div>
                             <div class="sim-pill">
-                                <span class="sim-pill-label">💾 Saved to Qdrant:</span>
+                                <span class="sim-pill-label">💾 Stored:</span>
                                 <span class="sim-pill-val text-success" id="sim-stat-saved-count">0</span>
                             </div>
                             <div class="sim-pill">
@@ -440,13 +440,13 @@
                                 <span class="sim-pill-val text-error" id="sim-stat-fast-count">0</span>
                             </div>
                             <div class="sim-pill">
-                                <span class="sim-pill-label">📦 Batch Queue:</span>
-                                <span class="sim-pill-val" id="sim-stat-batch-count">0</span>
+                                <span class="sim-pill-label">📡 Fleet Sync:</span>
+                                <span class="sim-pill-val text-success" id="sim-stat-fleet-sync">CONNECTED</span>
                             </div>
                         </div>
                         <div class="sim-toolbar-right">
-                            <button id="btn-sim-toggle" class="btn primary" style="background:var(--signal-teal);color:#FFFFFF;border:none;font-weight:600">▶ Start Mission</button>
-                            <button id="btn-sim-inject-anomaly" class="btn anomaly">⚡ Inject Hazard (Anomaly)</button>
+                            <button id="btn-sim-toggle" class="btn primary" style="background:var(--signal-teal);color:#FFFFFF;border:none;font-weight:600">▶ Start Fleet Mission</button>
+                            <button id="btn-sim-inject-anomaly" class="btn anomaly">⚡ Drop Hazard in Alpha's Path</button>
                             <button id="btn-sim-heatmap" class="btn" style="background:#4A5568;color:#FFF;border:none">🔥 Toggle Heatmap</button>
                             <button id="btn-sim-spawn-routine" class="btn">📦 Spawn Cargo</button>
                             <button id="btn-sim-consolidate" class="btn" style="background:#F5A623;color:#FFF;border:none">🧬 Consolidate</button>
@@ -459,18 +459,19 @@
                         <!-- Left Column: Floor Canvas (22x13 @ 36px) -->
                         <div class="card sim-arena-card">
                             <div class="card-header">
-                                <h3>Warehouse Floor (22×13 Grid — Autonomous BFS Routing)</h3>
-                                <span class="badge synced">Radar Scan: 3.5 Cells</span>
+                                <h3>Warehouse Floor (Multi-Robot Fleet — Alpha &amp; Bravo Real-Time Cloud Sync)</h3>
+                                <span class="badge synced">Edge-to-Cloud-to-Fleet Co-op</span>
                             </div>
                             <div class="canvas-wrapper">
                                 <canvas id="arena-canvas" width="792" height="468"></canvas>
                             </div>
                             <div class="arena-legend">
+                                <span><span class="legend-dot" style="background:#0FB8A0"></span> Alpha (edge-001) Left Zone</span>
+                                <span><span class="legend-dot" style="background:#F5A623"></span> Bravo (edge-002) Right Zone</span>
                                 <span><span class="legend-dot" style="background:#16213E"></span> Shelf Rack</span>
-                                <span><span class="legend-dot" style="background:#0FB8A0"></span> Dock (1,1)</span>
-                                <span><span class="legend-dot" style="background:#0FB8A0"></span> Routine Cargo</span>
+                                <span><span class="legend-dot" style="background:#0FB8A0"></span> Dock Alpha (1,1)</span>
+                                <span><span class="legend-dot" style="background:#F5A623"></span> Dock Bravo (20,1)</span>
                                 <span><span class="legend-dot" style="background:#E85D4A"></span> Hazard / Anomaly</span>
-                                <span><span class="legend-line"></span> Planned BFS Path</span>
                             </div>
                         </div>
 
@@ -537,7 +538,7 @@
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
 
-    <script src="/static/app.js?v=2.9"></script>
-    <script src="/static/simulation.js?v=2.9"></script>
+    <script src="/static/app.js?v=3.1"></script>
+    <script src="/static/simulation.js?v=3.1"></script>
 </body>
 </html>
