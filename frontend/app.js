@@ -63,6 +63,16 @@ function truncate(s, n = 80) {
     return s && s.length > n ? s.slice(0, n) + '…' : (s || '');
 }
 
+function escapeHtml(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 function syncBadge(mem) {
     let badges = '';
     if (mem.priority === 'high' || mem.priority_reason === 'anomaly') {
@@ -407,7 +417,8 @@ async function executeSearch() {
             container.appendChild(card);
         });
     } catch (e) {
-        container.innerHTML = '<div class="empty-state" style="color:var(--coral-accent)">Search failed — verify backend is active.</div>';
+        console.error('Search error:', e);
+        container.innerHTML = `<div class="empty-state" style="color:var(--coral-accent)">Search failed — verify backend is active (${escapeHtml(e.message)}).</div>`;
     }
 }
 

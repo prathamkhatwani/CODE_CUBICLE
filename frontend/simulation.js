@@ -241,6 +241,79 @@
         return path;
     }
 
+    function findLocalPatrolPath() {
+        const candidates = [];
+        for (let r = 1; r < ROWS - 1; r++) {
+            for (let c = 1; c < COLS - 1; c++) {
+                if (grid[r][c] === 0 && !dynamicObstacles.has(`${c},${r}`)) {
+                    const dist = Math.abs(c - robot.cellC) + Math.abs(r - robot.cellR);
+                    if (dist >= 2 && dist <= 14) {
+                        candidates.push({ c, r });
+                    }
+                }
+            }
+        }
+        candidates.sort(() => Math.random() - 0.5);
+        for (const cand of candidates) {
+            const p = findPathBFS(robot.cellC, robot.cellR, cand.c, cand.r);
+            if (p && p.length > 0) {
+                robot.path = p;
+                return p;
+            }
+        }
+        return null;
+    }
+
+    function replanPathAroundHazards() {
+        if (robot.targetItem && !dynamicObstacles.has(`${robot.targetItem.c},${robot.targetItem.r}`)) {
+            const p = findPathBFS(robot.cellC, robot.cellR, robot.targetItem.c, robot.targetItem.r);
+            if (p && p.length > 0) {
+                robot.path = p;
+                return;
+            }
+        }
+
+        // If target item is unreachable or is a hazard, reset it
+        robot.targetItem = null;
+
+        if (robot.state === 'RETURNING') {
+            const dockPath = findPathBFS(robot.cellC, robot.cellR, 1, 1);
+            if (dockPath && dockPath.length > 0) {
+                robot.path = dockPath;
+            } else {
+                findLocalPatrolPath();
+            }
+            return;
+        }
+
+        // Search for an unblocked routine item
+        const available = items.filter(it => !it.isHazard && !it.picked && !dynamicObstacles.has(`${it.c},${it.r}`));
+        let bestPath = null;
+        let chosenItem = null;
+        for (const it of available) {
+            const p = findPathBFS(robot.cellC, robot.cellR, it.c, it.r);
+            if (p && p.length > 0 && (!bestPath || p.length < bestPath.length)) {
+                bestPath = p;
+                chosenItem = it;
+            }
+        }
+
+        if (bestPath && chosenItem) {
+            robot.targetItem = chosenItem;
+            robot.path = bestPath;
+            robot.state = 'PICKING';
+        } else {
+            // Patrol towards safe area or local patrol loop if dock is blocked
+            robot.state = 'PATROLLING';
+            const dockPath = findPathBFS(robot.cellC, robot.cellR, 1, 1);
+            if (dockPath && dockPath.length > 0) {
+                robot.path = dockPath;
+            } else {
+                findLocalPatrolPath();
+            }
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     //  LOGGING & STATS
     // ═══════════════════════════════════════════════════════════════════════
@@ -361,6 +434,9 @@
         }
 
         if (targetC !== null) {
+            // Block cell IMMEDIATELY in navigation
+            dynamicObstacles.add(`${targetC},${targetR}`);
+
             const text = hazardMeta.textGen(targetC, targetR);
             const hazardItem = {
                 id: 'haz_' + Date.now(),
@@ -379,6 +455,9 @@
                 picked: false
             };
             items.push(hazardItem);
+
+            // Replan path around hazard IMMEDIATELY and synchronously
+            replanPathAroundHazards();
 
             // Auto-start simulation if stopped so user sees dynamic interaction immediately
             if (!isRunning) {
@@ -600,6 +679,10 @@
 
                 if (dist <= scanDistPx) {
                     item.detected = true;
+                    if (item.isHazard) {
+                        dynamicObstacles.add(`${item.c},${item.r}`);
+                        replanPathAroundHazards();
+                    }
                     robot.lockOnTarget = {
                         x: item.x,
                         y: item.y,
@@ -615,36 +698,52 @@
         // 3. State Machine & Autonomous Patrol
         if (robot.cargo.length >= robot.maxCargo && robot.state !== 'RETURNING' && robot.state !== 'DOCKING') {
             robot.state = 'RETURNING';
-            robot.path = findPathBFS(robot.cellC, robot.cellR, 1, 1);
-            logSim(`📦 Cargo capacity reached (${robot.cargo.length}/${robot.maxCargo}) — Navigating to Dock (1,1)...`, 'info');
+            const pathToDock = findPathBFS(robot.cellC, robot.cellR, 1, 1);
+            if (pathToDock && pathToDock.length > 0) {
+                robot.path = pathToDock;
+                logSim(`📦 Cargo capacity reached (${robot.cargo.length}/${robot.maxCargo}) — Navigating to Dock (1,1)...`, 'info');
+            } else {
+                logSim(`⚠️ Dock (1,1) blocked by hazards! Emergency field depot unload engaged.`, 'warning');
+                robot.state = 'DOCKING';
+                setTimeout(() => {
+                    const unloaded = robot.cargo.length;
+                    robot.cargo = [];
+                    logSim(`⚡ FIELD DEPOT: Unloaded ${unloaded} cargo items safely outside hazard perimeter.`, 'success');
+                    robot.state = 'PATROLLING';
+                    findLocalPatrolPath();
+                }, 800);
+            }
         } else if (robot.state === 'PATROLLING' || robot.state === 'STANDBY') {
             robot.state = 'PATROLLING';
-            // Find nearest unpicked routine item
+            // Find nearest reachable unpicked routine item
             const available = items.filter(it => !it.isHazard && !it.picked);
-            if (available.length > 0) {
-                let nearest = null;
-                let minPathLen = Infinity;
-                let bestPath = null;
+            let nearest = null;
+            let minPathLen = Infinity;
+            let bestPath = null;
 
-                available.forEach(it => {
-                    const p = findPathBFS(robot.cellC, robot.cellR, it.c, it.r);
-                    if (p && p.length < minPathLen) {
-                        minPathLen = p.length;
-                        nearest = it;
-                        bestPath = p;
-                    }
-                });
-
-                if (nearest && bestPath) {
-                    robot.targetItem = nearest;
-                    robot.path = bestPath;
-                    robot.state = 'PICKING';
+            available.forEach(it => {
+                const p = findPathBFS(robot.cellC, robot.cellR, it.c, it.r);
+                if (p && p.length < minPathLen) {
+                    minPathLen = p.length;
+                    nearest = it;
+                    bestPath = p;
                 }
+            });
+
+            if (nearest && bestPath) {
+                robot.targetItem = nearest;
+                robot.path = bestPath;
+                robot.state = 'PICKING';
             } else {
+                // No reachable items!
                 autoSpawnTimer++;
-                if (autoSpawnTimer >= 180) { // every 3s
+                if (autoSpawnTimer >= 120) { // every 2s
                     autoSpawnTimer = 0;
                     spawnRoutineItems(4);
+                }
+                // If robot has no path, patrol reachable open waypoints in current zone
+                if (!robot.path || robot.path.length === 0) {
+                    findLocalPatrolPath();
                 }
             }
         }
@@ -652,6 +751,15 @@
         // 4. Movement Execution
         if (robot.path && robot.path.length > 0) {
             const nextNode = robot.path[0];
+
+            // Obstacle & Hazard Collision Avoidance Guard:
+            if (dynamicObstacles.has(`${nextNode.c},${nextNode.r}`)) {
+                logSim(`⚠️ Hazard blocking route at (${nextNode.c}, ${nextNode.r})! Rerouting dynamically...`, 'warning');
+                robot.path = [];
+                replanPathAroundHazards();
+                return;
+            }
+
             const dx = nextNode.x - robot.x;
             const dy = nextNode.y - robot.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
@@ -691,6 +799,25 @@
         } else if (robot.state === 'PICKING' && (!robot.path || robot.path.length === 0)) {
             robot.state = 'PATROLLING';
         }
+
+        // 4b. Physical Hazard Separation Guard (Robot never clips into or covers hazard)
+        items.forEach(it => {
+            if (it.isHazard) {
+                const dist = Math.hypot(robot.x - it.x, robot.y - it.y);
+                const safeDist = CELL_SIZE * 0.95;
+                if (dist < safeDist && dist > 0) {
+                    const angle = Math.atan2(robot.y - it.y, robot.x - it.x);
+                    const push = (safeDist - dist) + 1;
+                    robot.x += Math.cos(angle) * push;
+                    robot.y += Math.sin(angle) * push;
+                    robot.cellC = Math.max(0, Math.min(COLS - 1, Math.floor(robot.x / CELL_SIZE)));
+                    robot.cellR = Math.max(0, Math.min(ROWS - 1, Math.floor(robot.y / CELL_SIZE)));
+                    if (robot.path && robot.path.some(pt => dynamicObstacles.has(`${pt.c},${pt.r}`))) {
+                        replanPathAroundHazards();
+                    }
+                }
+            }
+        });
 
         // 5. Batch Lane Flush Timer (every 8s)
         batchFlushTimer++;
