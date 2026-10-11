@@ -278,6 +278,17 @@ async def add_memory(mem: MemoryCreate, _: bool = Depends(verify_auth)):
             f"'{mem.text[:60]}…' from {mem.source}",
             {"id": pid, "category": mem.category, "similarity": nearest_sim},
         )
+        # Automatic batch sync when memory buffer reaches threshold (30 records)
+        if settings.BATCH_SYNC_THRESHOLD > 0 and sync_agent.is_online:
+            pending_count = sync_agent.get_pending_count()
+            if pending_count >= settings.BATCH_SYNC_THRESHOLD:
+                sync_res = sync_agent.sync()
+                activity_log.log(
+                    ActivityType.SYNC_COMPLETED,
+                    f"Auto-Batch Sync ({pending_count} memories)",
+                    f"Routine cargo memory buffer reached threshold of {settings.BATCH_SYNC_THRESHOLD} records ({pending_count} queued) — automatically synced batch to Cloud Qdrant.",
+                    {"threshold": settings.BATCH_SYNC_THRESHOLD, "records_pushed": sync_res.records_pushed},
+                )
 
     point = edge_store.get_point(pid)
     return edge_store.point_to_response(point)
@@ -519,6 +530,7 @@ async def sync_status():
         "synced_count": sync_agent.get_synced_count(),
         "queue_length": queue_info["queue_length"],
         "anomalies_queued": queue_info["anomalies_queued"],
+        "batch_threshold": settings.BATCH_SYNC_THRESHOLD,
         "last_sync": (
             sync_agent.history[-1].model_dump()
             if sync_agent.history

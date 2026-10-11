@@ -306,6 +306,10 @@
                                         <strong class="text-warning" id="sync-pending-count">0</strong>
                                     </div>
                                     <div class="node-metric-row">
+                                        <span>Batch Sync Policy:</span>
+                                        <strong class="text-success" id="sync-policy-badge">Auto at 30 records</strong>
+                                    </div>
+                                    <div class="node-metric-row">
                                         <span>Version Vector:</span>
                                         <strong style="font-family:var(--font-mono); font-size:0.75rem" id="sync-edge-vv">{alpha: 12}</strong>
                                     </div>
@@ -443,10 +447,15 @@
                                 <span class="sim-pill-label">📡 Fleet Sync:</span>
                                 <span class="sim-pill-val text-success" id="sim-stat-fleet-sync">CONNECTED</span>
                             </div>
+                            <div class="sim-pill">
+                                <span class="sim-pill-label">📦 Batch Sync:</span>
+                                <span class="sim-pill-val text-success" id="sim-stat-batch-count">0/30</span>
+                            </div>
                         </div>
                         <div class="sim-toolbar-right">
                             <button id="btn-sim-toggle" class="btn primary" style="background:var(--signal-teal);color:#FFFFFF;border:none;font-weight:600">▶ Start Fleet Mission</button>
-                            <button id="btn-sim-inject-anomaly" class="btn anomaly">⚡ Drop Hazard in Alpha's Path</button>
+                            <button id="btn-sim-inject-anomaly-alpha" class="btn anomaly" style="background:#0FB8A0;color:#FFFFFF;border:none">⚡ Hazard (Alpha)</button>
+                            <button id="btn-sim-inject-anomaly-bravo" class="btn anomaly" style="background:#E85D4A;color:#FFFFFF;border:none">⚡ Hazard (Bravo)</button>
                             <button id="btn-sim-heatmap" class="btn" style="background:#4A5568;color:#FFF;border:none">🔥 Toggle Heatmap</button>
                             <button id="btn-sim-spawn-routine" class="btn">📦 Spawn Cargo</button>
                             <button id="btn-sim-consolidate" class="btn" style="background:#F5A623;color:#FFF;border:none">🧬 Consolidate</button>
@@ -500,7 +509,7 @@
                                         <div id="sim-fast-lane-items" class="sim-lane-box"></div>
                                     </div>
                                     <div class="sim-lane-section mt-2">
-                                        <div class="sim-lane-title text-success">📦 Batch Lane (Routine Cargo)</div>
+                                        <div class="sim-lane-title text-success" id="sim-batch-lane-title">📦 Batch Lane (Auto-Sync at 30: <span id="sim-batch-lane-count">0/30</span>)</div>
                                         <div id="sim-batch-lane-items" class="sim-lane-box"></div>
                                     </div>
                                 </div>

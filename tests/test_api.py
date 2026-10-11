@@ -83,3 +83,39 @@ def test_api_reset_protection_when_production(client, monkeypatch):
     # With valid API key -> 200 OK
     res_auth = client.post("/api/reset", headers={"X-API-Key": settings.API_KEY})
     assert res_auth.status_code == 200
+
+
+def test_auto_batch_sync_at_threshold_30(client):
+    """Test that routine cargo memories automatically sync to cloud when buffer reaches 30 records without manual sync."""
+    client.post("/api/reset")
+
+    # Add 29 routine memories (should not auto-sync yet)
+    for i in range(29):
+        res = client.post("/api/memories", json={
+            "text": f"Routine cargo scan pallet #{i+1} verified in rack aisle A-{i % 5}",
+            "source": "robot-alpha-lidar",
+            "importance": 0.5,
+            "category": "inventory",
+            "tags": ["cargo", "routine"]
+        })
+        assert res.status_code == 200
+
+    status = client.get("/api/sync/status").json()
+    assert status["pending_count"] == 29
+    assert status["synced_count"] == 0
+
+    # Add the 30th routine memory -> should trigger automatic batch sync!
+    res_30 = client.post("/api/memories", json={
+        "text": "Routine cargo scan pallet #30 verified in rack aisle A-0",
+        "source": "robot-bravo-lidar",
+        "importance": 0.5,
+        "category": "inventory",
+        "tags": ["cargo", "routine"]
+    })
+    assert res_30.status_code == 200
+
+    # Verify that all 30 records were automatically synced to cloud
+    status_after = client.get("/api/sync/status").json()
+    assert status_after["pending_count"] == 0
+    assert status_after["synced_count"] == 30
+

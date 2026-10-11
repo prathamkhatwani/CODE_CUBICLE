@@ -194,10 +194,12 @@
     let pulses = []; // { x, y, radius, maxRadius, color, alpha, isAnomaly, rings, rotation }
     let fastLane = []; // Priority Anomaly queue
     let batchLane = []; // Routine batch queue
+    let routineBatchCount = 0; // Number of routine memories waiting for automatic batch sync
+    const BATCH_SYNC_THRESHOLD = 30; // Automatically trigger cloud sync when 30 routine memories accumulate
+    let isAutoBatchSyncing = false;
     let simLogs = [];
     let savedToQdrantCount = 0;
     let lastVectorMatch = null;
-    let batchFlushTimer = 0;
     let autoSpawnTimer = 0;
     let onScreenBanner = null; // { text, type, timer }
 
@@ -400,6 +402,11 @@
         if (elSaved) elSaved.textContent = savedToQdrantCount;
         if (elFast) elFast.textContent = fastLane.length;
         if (elFleetSync) elFleetSync.textContent = 'CONNECTED';
+
+        const elBatchCount = document.getElementById('sim-stat-batch-count');
+        const elBatchLaneCount = document.getElementById('sim-batch-lane-count');
+        if (elBatchCount) elBatchCount.textContent = `${routineBatchCount}/${BATCH_SYNC_THRESHOLD}`;
+        if (elBatchLaneCount) elBatchLaneCount.textContent = `${routineBatchCount}/${BATCH_SYNC_THRESHOLD}`;
     }
 
     function setCanvasBanner(text, type = 'info', duration = 300) {
@@ -446,39 +453,44 @@
         }
     }
 
-    function injectAnomalyHazard() {
+    function injectAnomalyHazard(target = 'alpha') {
         const hazardMeta = HAZARD_TYPES[Math.floor(Math.random() * HAZARD_TYPES.length)];
+        const bot = (target === 'bravo' || target === robotBravo) ? robotBravo : robotAlpha;
+        const otherBot = (bot === robotAlpha) ? robotBravo : robotAlpha;
+        const isBravo = (bot === robotBravo);
         
-        // Find best spawn location: in front of Robot Alpha (edge-001) in left zone
+        // Find best spawn location: in front of selected robot
         let targetC = null, targetR = null;
 
-        // Try placing ahead along Alpha's path
-        if (robotAlpha.path && robotAlpha.path.length > 1) {
-            const step = robotAlpha.path[Math.min(2, robotAlpha.path.length - 1)];
+        // Try placing ahead along bot's path
+        if (bot.path && bot.path.length > 1) {
+            const step = bot.path[Math.min(2, bot.path.length - 1)];
             if (grid[step.r][step.c] === 0 && !dynamicObstacles.has(`${step.c},${step.r}`)) {
                 targetC = step.c;
                 targetR = step.r;
             }
         }
 
-        // Try adjacent forward cell based on Alpha's heading
+        // Try adjacent forward cell based on bot's heading
         if (targetC === null) {
-            const forwardC = Math.round(robotAlpha.cellC + Math.cos(robotAlpha.heading) * 2);
-            const forwardR = Math.round(robotAlpha.cellR + Math.sin(robotAlpha.heading) * 2);
+            const forwardC = Math.round(bot.cellC + Math.cos(bot.heading) * 2);
+            const forwardR = Math.round(bot.cellR + Math.sin(bot.heading) * 2);
             if (forwardC >= 0 && forwardC < COLS && forwardR >= 0 && forwardR < ROWS && grid[forwardR][forwardC] === 0 && !dynamicObstacles.has(`${forwardC},${forwardR}`)) {
                 targetC = forwardC;
                 targetR = forwardR;
             }
         }
 
-        // Fallback: open cell in Alpha's left patrol zone (cols 2-8)
+        // Fallback: open cell in bot's designated patrol sector (Alpha cols 2-9, Bravo cols 13-20)
         if (targetC === null) {
             let attempts = 0;
+            const minCol = isBravo ? 13 : 2;
+            const colSpan = isBravo ? 7 : 7;
             while (attempts < 50) {
                 attempts++;
-                const c = Math.floor(Math.random() * 7) + 2;
+                const c = Math.floor(Math.random() * colSpan) + minCol;
                 const r = Math.floor(Math.random() * (ROWS - 4)) + 2;
-                if (grid[r][c] === 0 && !dynamicObstacles.has(`${c},${r}`) && (c !== robotAlpha.cellC || r !== robotAlpha.cellR)) {
+                if (grid[r][c] === 0 && !dynamicObstacles.has(`${c},${r}`) && (c !== bot.cellC || r !== bot.cellR)) {
                     targetC = c;
                     targetR = r;
                     break;
@@ -503,14 +515,14 @@
                 category: hazardMeta.category,
                 importance: hazardMeta.importance,
                 isHazard: true,
-                detected: true, // Immediate capture by Alpha
+                detected: true, // Immediate capture by the detecting bot
                 recording: false,
                 picked: false
             };
             items.push(hazardItem);
 
-            // Replan Alpha's path around hazard IMMEDIATELY and synchronously
-            replanPathAroundHazards(robotAlpha);
+            // Replan detecting bot's path around hazard IMMEDIATELY and synchronously
+            replanPathAroundHazards(bot);
 
             // Auto-start simulation if stopped so user sees dynamic fleet interaction immediately
             if (!isRunning) {
@@ -522,22 +534,23 @@
                 }
             }
 
-            // Robot Alpha LiDAR Lock-On Aim
-            robotAlpha.heading = Math.atan2(hazardItem.y - robotAlpha.y, hazardItem.x - robotAlpha.x);
-            robotAlpha.lockOnTarget = {
+            // Detecting Robot LiDAR Lock-On Aim
+            bot.heading = Math.atan2(hazardItem.y - bot.y, hazardItem.x - bot.x);
+            bot.lockOnTarget = {
                 x: hazardItem.x,
                 y: hazardItem.y,
                 alpha: 1.0,
                 color: '#E85D4A',
-                text: `${hazardMeta.name} [ALPHA 001]`
+                text: `${hazardMeta.name} [${bot.name.toUpperCase()}]`
             };
 
-            logSim(`⚡ [ALPHA RADAR LOCK-ON] Detected ${hazardMeta.name} at (${targetC}, ${targetR}) — Triggering Qdrant Edge Embedding!`, 'warning');
-            showSimToast(`🚨 Alpha (edge-001) Detected: ${hazardMeta.name}`, 'error');
-            setCanvasBanner(`🚨 NOVEL HAZARD IN ALPHA'S AISLE: ${hazardMeta.name} — SAVING TO QDRANT EDGE...`, 'error', 240);
+            const botLabel = isBravo ? 'Bravo (edge-002)' : 'Alpha (edge-001)';
+            logSim(`⚡ [${bot.name.toUpperCase()} RADAR LOCK-ON] Detected ${hazardMeta.name} at (${targetC}, ${targetR}) — Triggering Qdrant Edge Embedding!`, 'warning');
+            showSimToast(`🚨 ${botLabel} Detected: ${hazardMeta.name}`, 'error');
+            setCanvasBanner(`🚨 NOVEL HAZARD IN ${bot.name.toUpperCase()}'S AISLE: ${hazardMeta.name} — SAVING TO QDRANT EDGE...`, 'error', 240);
 
-            // Record to Qdrant backend immediately
-            recordMemoryToQdrant(hazardItem, robotAlpha);
+            // Record to Qdrant backend immediately with detecting bot reference
+            recordMemoryToQdrant(hazardItem, bot);
         }
     }
 
@@ -680,19 +693,27 @@
                 // Force other bot to replan path immediately
                 replanPathAroundHazards(otherBot);
             }, 300);
-            logSim(`⚡ Dynamic BFS rerouted robot path safely around hazard (${robot.path.length} waypoints).`, 'info');
+            logSim(`⚡ Dynamic BFS rerouted ${detectingBot.name} path safely around hazard (${detectingBot.path.length} waypoints).`, 'info');
 
         } else {
             batchLane.unshift({
                 name: ROUTINE_CLUSTERS[item.type].label,
                 type: item.type,
                 sim: nearestSim,
-                id: memId.slice(0, 8)
+                id: memId.slice(0, 8),
+                bot: detectingBot.name
             });
-            if (batchLane.length > 20) batchLane.pop();
+            if (batchLane.length > 35) batchLane.pop();
 
-            logSim(`💾 [QDRANT EDGE] Saved Routine Memory: ${ROUTINE_CLUSTERS[item.type].label} (Sim: ${(nearestSim * 100).toFixed(0)}%) → Local Vector Store.`, 'info');
-            setCanvasBanner(`💾 ROUTINE MEMORY STORED (Sim: ${(nearestSim * 100).toFixed(0)}%) → Batch Queue`, 'success', 180);
+            routineBatchCount++;
+
+            logSim(`💾 [QDRANT EDGE] Saved Routine Memory: ${ROUTINE_CLUSTERS[item.type].label} (Batch: ${routineBatchCount}/${BATCH_SYNC_THRESHOLD}) → Local Vector Store.`, 'info');
+            setCanvasBanner(`💾 ROUTINE MEMORY STORED (${routineBatchCount}/${BATCH_SYNC_THRESHOLD}) → Batch Queue`, 'success', 180);
+
+            // Automatically sync batch when routine memories reach threshold (30)
+            if (routineBatchCount >= BATCH_SYNC_THRESHOLD) {
+                triggerAutoBatchSync();
+            }
         }
 
         renderLanes();
@@ -700,6 +721,43 @@
 
         if (window.refreshOverview) {
             window.refreshOverview().catch(() => {});
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  AUTOMATIC BATCH SYNC ENGINE (TRIGGERED AT 30 ROUTINE MEMORIES)
+    // ═══════════════════════════════════════════════════════════════════════
+    async function triggerAutoBatchSync() {
+        if (isAutoBatchSyncing) return;
+        isAutoBatchSyncing = true;
+        const count = routineBatchCount || batchLane.length || BATCH_SYNC_THRESHOLD;
+
+        logSim(`📦 [AUTO-BATCH SYNC] Routine queue reached threshold (${count} / ${BATCH_SYNC_THRESHOLD} memories) — Automatically syncing batch to Cloud Qdrant!`, 'warning');
+        showSimToast(`📦 Auto-Batch Sync: 30 routine memories reached threshold → Synced to Cloud!`, 'success');
+        setCanvasBanner(`📦 AUTO BATCH SYNC: 30 ROUTINE MEMORIES REACHED &rarr; AUTO-SYNCED TO CLOUD!`, 'success', 320);
+
+        // Visual fiber packets across the UI if fiber highway is available
+        if (window.emitSyncPacket) {
+            for (let i = 0; i < 4; i++) {
+                setTimeout(() => window.emitSyncPacket('batch', `Auto-Batch (${count} memories)`), i * 140);
+            }
+        }
+
+        try {
+            const res = await callBackend('/api/sync', { method: 'POST' });
+            const pushedCount = (res && res.records_pushed !== undefined) ? res.records_pushed : count;
+            logSim(`✅ [CLOUD SYNC] Batch successfully persisted to Cloud Qdrant: ${pushedCount} routine records synchronized.`, 'success');
+            routineBatchCount = 0;
+            batchLane = [];
+            renderLanes();
+            updatePills();
+            if (window.refreshOverview) window.refreshOverview().catch(() => {});
+            if (window.refreshSyncPanel) window.refreshSyncPanel().catch(() => {});
+        } catch (err) {
+            console.error('Auto batch sync failed:', err);
+            logSim(`⚠️ [AUTO-BATCH SYNC] Cloud sync encountered error.`, 'error');
+        } finally {
+            isAutoBatchSyncing = false;
         }
     }
 
@@ -937,16 +995,9 @@
             }
         }
 
-        // 5. Batch Lane Flush Timer (every 8s)
-        batchFlushTimer++;
-        if (batchFlushTimer >= 480) {
-            batchFlushTimer = 0;
-            if (batchLane.length > 0) {
-                const count = batchLane.length;
-                batchLane = [];
-                renderLanes();
-                logSim(`☁️ Central Sync: Flushed ${count} routine records to cloud vector store.`, 'success');
-            }
+        // 5. Automatic Batch Sync at 30 routine memories threshold
+        if (routineBatchCount >= BATCH_SYNC_THRESHOLD && !isAutoBatchSyncing) {
+            triggerAutoBatchSync();
         }
 
         updatePills();
@@ -1557,15 +1608,20 @@
 
         if (elBatch) {
             if (batchLane.length === 0) {
-                elBatch.innerHTML = '<div class="sim-empty-lane">Batch buffer empty</div>';
+                elBatch.innerHTML = `<div class="sim-empty-lane">Batch buffer empty (Auto-syncs at ${BATCH_SYNC_THRESHOLD} records)</div>`;
             } else {
-                elBatch.innerHTML = batchLane.slice(0, 4).map(item => `
+                elBatch.innerHTML = `
+                    <div style="font-size:0.75rem;color:#10b981;font-weight:600;margin-bottom:6px;display:flex;justify-content:space-between">
+                        <span>Auto-Sync Progress:</span>
+                        <span>${routineBatchCount} / ${BATCH_SYNC_THRESHOLD} records</span>
+                    </div>
+                ` + batchLane.slice(0, 4).map(item => `
                     <div class="sim-lane-card batch">
                         <span class="badge synced">📦 BATCH QUEUE</span>
                         <span style="font-weight:500;margin-left:8px">${item.name}</span>
                         <span style="font-size:0.75rem;color:#718096;margin-left:auto">${(item.sim * 100).toFixed(0)}%</span>
                     </div>
-                `).join('') + (batchLane.length > 4 ? `<div style="font-size:0.75rem;color:#718096;text-align:center;padding-top:4px">+${batchLane.length - 4} more records waiting for sleep cycle</div>` : '');
+                `).join('') + (batchLane.length > 4 ? `<div style="font-size:0.75rem;color:#718096;text-align:center;padding-top:4px">+${batchLane.length - 4} more records waiting in buffer</div>` : '');
             }
         }
     }
@@ -1594,6 +1650,7 @@
         pulses = [];
         fastLane = [];
         batchLane = [];
+        routineBatchCount = 0;
 
         // Reset Robot Alpha (edge-001)
         robotAlpha.x = 1.5 * CELL_SIZE;
@@ -1685,8 +1742,14 @@
         const btnToggle = document.getElementById('btn-sim-toggle');
         if (btnToggle) btnToggle.addEventListener('click', toggleMission);
 
+        const btnAnomalyAlpha = document.getElementById('btn-sim-inject-anomaly-alpha');
+        if (btnAnomalyAlpha) btnAnomalyAlpha.addEventListener('click', () => injectAnomalyHazard('alpha'));
+
+        const btnAnomalyBravo = document.getElementById('btn-sim-inject-anomaly-bravo');
+        if (btnAnomalyBravo) btnAnomalyBravo.addEventListener('click', () => injectAnomalyHazard('bravo'));
+
         const btnAnomaly = document.getElementById('btn-sim-inject-anomaly');
-        if (btnAnomaly) btnAnomaly.addEventListener('click', injectAnomalyHazard);
+        if (btnAnomaly) btnAnomaly.addEventListener('click', () => injectAnomalyHazard('alpha'));
 
         const btnHeatmap = document.getElementById('btn-sim-heatmap');
         if (btnHeatmap) {
@@ -1716,6 +1779,8 @@
         reset: resetSimulation,
         toggle: toggleMission,
         injectAnomaly: injectAnomalyHazard,
+        injectAnomalyAlpha: () => injectAnomalyHazard('alpha'),
+        injectAnomalyBravo: () => injectAnomalyHazard('bravo'),
         consolidate: consolidateSimulationMemories
     };
 

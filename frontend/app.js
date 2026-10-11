@@ -576,8 +576,12 @@ async function refreshSyncPanel() {
     try {
         const status = await api('/api/sync/status');
         const pendingEl = document.getElementById('sync-pending-count');
-        if (pendingEl) pendingEl.textContent = status.pending_count;
+        const threshold = status.batch_threshold || 30;
+        if (pendingEl) pendingEl.textContent = `${status.pending_count} (Auto-sync at ${threshold})`;
         
+        const policyEl = document.getElementById('sync-policy-badge');
+        if (policyEl) policyEl.textContent = `Auto at ${threshold} records`;
+
         const lastTimeEl = document.getElementById('sync-last-time');
         if (lastTimeEl) {
             lastTimeEl.textContent = status.last_sync

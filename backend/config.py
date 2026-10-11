@@ -39,6 +39,7 @@ class Settings:
 
     # ── Sync & Conflict Resolution ──
     SYNC_BATCH_SIZE: int = 50
+    BATCH_SYNC_THRESHOLD: int = 30          # Auto-sync to cloud when pending routine memories reach this threshold
     RETRY_MAX: int = 5
     RETRY_BACKOFF_BASE: float = 2.0
     CONFLICT_STRATEGY: str = "version_vector" # "version_vector" or "server_timestamp"
